@@ -151,6 +151,49 @@ def load_model():
         st.error("Error loading model. Please ensure model files exist.")
         return None
 
+def load_random_example(example_type):
+    """Load a random example from the dataset"""
+    try:
+        import pandas as pd
+        
+        # Load dataset
+        df = pd.read_csv("koi.csv", comment='#')
+        df['target'] = df['koi_disposition'].map({'CONFIRMED': 2, 'CANDIDATE': 1, 'FALSE POSITIVE': 0})
+        df = df[df['target'].notna()]
+        
+        # Filter by type
+        if example_type == "confirmed":
+            filtered_df = df[df['koi_disposition'] == 'CONFIRMED']
+        elif example_type == "candidate":
+            filtered_df = df[df['koi_disposition'] == 'CANDIDATE']
+        else:
+            return None
+            
+        if len(filtered_df) == 0:
+            return None
+            
+        # Get random row
+        random_row = filtered_df.sample(n=1).iloc[0]
+        
+        return {
+            'period': random_row['koi_period'],
+            'duration': random_row['koi_duration'],
+            'depth': random_row['koi_depth'],
+            'prad': random_row.get('koi_prad', 1.0),
+            'impact': random_row.get('koi_impact', 0.5),
+            'snr': random_row.get('koi_model_snr', 10.0),
+            'steff': random_row.get('koi_steff', 5778.0),
+            'srad': random_row.get('koi_srad', 1.0),
+            'smass': random_row.get('koi_smass', 1.0),
+            'expected': random_row['koi_disposition'],
+            # Store the actual row data for proper prediction
+            'actual_row': random_row
+        }
+        
+    except Exception as e:
+        st.error(f"Error loading random example: {e}")
+        return None
+
 def create_prediction_form(model):
     """Create clean prediction form"""
     st.header("Exoplanet Classification Interface")
@@ -160,12 +203,40 @@ def create_prediction_form(model):
     with col1:
         st.subheader("Orbital Parameters")
         
+        # Add random example button
+        col_btn1, col_btn2 = st.columns([1, 1])
+        with col_btn1:
+            if st.button("🎲 Random Confirmed Planet", help="Load a random confirmed exoplanet example"):
+                st.session_state.random_example = "confirmed"
+        with col_btn2:
+            if st.button("🎲 Random Candidate", help="Load a random candidate exoplanet example"):
+                st.session_state.random_example = "candidate"
+        
+        # Load random example if requested
+        if hasattr(st.session_state, 'random_example') and st.session_state.random_example:
+            random_data = load_random_example(st.session_state.random_example)
+            if random_data:
+                # Update default values for next form render
+                st.session_state.period = random_data['period']
+                st.session_state.duration = random_data['duration'] 
+                st.session_state.depth = random_data['depth']
+                st.session_state.prad = random_data['prad']
+                st.session_state.impact = random_data['impact']
+                st.session_state.snr = random_data['snr']
+                st.session_state.steff = random_data['steff']
+                st.session_state.srad = random_data['srad']
+                st.session_state.smass = random_data['smass']
+                st.session_state.expected_result = random_data['expected']
+                st.session_state.actual_row_data = random_data['actual_row']
+                # Clear the flag
+                st.session_state.random_example = None
+        
         # Key parameters organized by scientific categories
         with st.expander("Fundamental Transit Parameters", expanded=True):
             period = st.number_input(
                 "Orbital Period (days)",
                 min_value=0.0,
-                value=1.0,
+                value=st.session_state.get('period', 1.0),
                 format="%.6f",
                 help="Time for one complete orbit"
             )
@@ -173,7 +244,7 @@ def create_prediction_form(model):
             duration = st.number_input(
                 "Transit Duration (hours)",
                 min_value=0.0,
-                value=2.0,
+                value=st.session_state.get('duration', 2.0),
                 format="%.6f",
                 help="Duration of planetary transit"
             )
@@ -181,7 +252,7 @@ def create_prediction_form(model):
             depth = st.number_input(
                 "Transit Depth (ppm)",
                 min_value=0.0,
-                value=1000.0,
+                value=st.session_state.get('depth', 1000.0),
                 step=100.0,
                 help="Fractional decrease in stellar brightness"
             )
@@ -190,7 +261,7 @@ def create_prediction_form(model):
             prad = st.number_input(
                 "Planetary Radius (Earth radii)",
                 min_value=0.0,
-                value=1.0,
+                value=st.session_state.get('prad', 1.0),
                 format="%.3f",
                 help="Radius compared to Earth"
             )
@@ -198,7 +269,7 @@ def create_prediction_form(model):
             impact = st.number_input(
                 "Impact Parameter",
                 min_value=0.0,
-                value=0.5,
+                value=st.session_state.get('impact', 0.5),
                 format="%.3f",
                 help="Minimum distance from stellar center"
             )
@@ -206,7 +277,7 @@ def create_prediction_form(model):
             snr = st.number_input(
                 "Signal-to-Noise Ratio",
                 min_value=0.0,
-                value=10.0,
+                value=st.session_state.get('snr', 10.0),
                 format="%.1f",
                 help="Transit signal quality measure"
             )
@@ -215,7 +286,7 @@ def create_prediction_form(model):
             steff = st.number_input(
                 "Stellar Temperature (K)",
                 min_value=1000.0,
-                value=5778.0,
+                value=st.session_state.get('steff', 5778.0),
                 step=100.0,
                 help="Effective stellar temperature"
             )
@@ -223,7 +294,7 @@ def create_prediction_form(model):
             srad = st.number_input(
                 "Stellar Radius (Solar radii)",
                 min_value=0.1,
-                value=1.0,
+                value=st.session_state.get('srad', 1.0),
                 format="%.3f",
                 help="Radius compared to Sun"
             )
@@ -231,7 +302,7 @@ def create_prediction_form(model):
             smass = st.number_input(
                 "Stellar Mass (Solar masses)",
                 min_value=0.1,
-                value=1.0,
+                value=st.session_state.get('smass', 1.0),
                 format="%.3f",
                 help="Mass compared to Sun"
             )
@@ -270,52 +341,64 @@ def create_prediction_form(model):
         else:
             st.info("Using Standard Model")
         
-        if st.button("Classify Exoplanet", type="primary", use_container_width=True):
-            # Prepare feature vector - handle both model types
-            if hasattr(model, 'feature_names'):
-                # Advanced ensemble model
-                feature_names = model.feature_names
+        # Show expected result if we loaded a random example
+        if hasattr(st.session_state, 'expected_result') and st.session_state.expected_result:
+            expected = st.session_state.expected_result
+            if expected == 'CONFIRMED':
+                st.success(f"📋 Expected Result: {expected} (Real confirmed exoplanet)")
+            elif expected == 'CANDIDATE':
+                st.warning(f"📋 Expected Result: {expected} (Real candidate exoplanet)")
             else:
-                # Standard pipeline model
-                feature_names = model.named_steps['preprocess'].transformers_[0][2]
+                st.error(f"📋 Expected Result: {expected} (Real false positive)")
+        
+        if st.button("Classify Exoplanet", type="primary", use_container_width=True):
+            # Get the exact features the model expects
+            preprocess_pipeline = model.named_steps['preprocess']
+            expected_features = preprocess_pipeline.named_steps['imputer'].feature_names_in_
             
-            # Map our inputs to model features
-            feature_mapping = {
-                'koi_period': period,
-                'koi_period_err1': period_err,
-                'koi_duration': duration,
-                'koi_duration_err1': duration_err,
-                'koi_depth': depth,
-                'koi_depth_err1': depth_err,
-                'koi_prad': prad,
-                'koi_prad_err1': depth_err / 100,  # Error proportional to depth
-                'koi_impact': impact,
-                'koi_impact_err1': impact * 0.1,
-                'koi_model_snr': snr,
-                'koi_steff': steff,
-                'koi_steff_err1': steff * 0.01,
-                'koi_srad': srad,
-                'koi_srad_err1': srad * 0.05,
-                'koi_smass': smass,
-                'koi_smass_err1': smass * 0.1
-            }
-            
-            # Fill remaining features
-            prediction_data = []
-            for feature in feature_names:
-                if feature in feature_mapping:
-                    prediction_data.append(feature_mapping[feature])
-                else:
-                    # Reasonable defaults based on feature type
-                    if 'fpflag' in feature:
-                        prediction_data.append(0)  # No false positive flags
-                    elif 'err' in feature:
-                        prediction_data.append(0.0)  # No uncertainty
+            # Check if we have actual row data (from random example)
+            if hasattr(st.session_state, 'actual_row_data') and st.session_state.actual_row_data is not None:
+                # Use actual dataset values for accurate prediction
+                actual_row = st.session_state.actual_row_data
+                X_pred = pd.DataFrame([actual_row[expected_features].fillna(0).values], columns=expected_features)
+            else:
+                # Use form inputs (manual entry)
+                feature_mapping = {
+                    'koi_period': period,
+                    'koi_period_err1': period_err,
+                    'koi_duration': duration,
+                    'koi_duration_err1': duration_err,
+                    'koi_depth': depth,
+                    'koi_depth_err1': depth_err,
+                    'koi_prad': prad,
+                    'koi_prad_err1': depth_err / 100,  # Error proportional to depth
+                    'koi_impact': impact,
+                    'koi_impact_err1': impact * 0.1,
+                    'koi_model_snr': snr,
+                    'koi_steff': steff,
+                    'koi_steff_err1': steff * 0.01,
+                    'koi_srad': srad,
+                    'koi_srad_err1': srad * 0.05,
+                    'koi_smass': smass,
+                    'koi_smass_err1': smass * 0.1
+                }
+                
+                # Fill remaining features
+                prediction_data = []
+                for feature in expected_features:
+                    if feature in feature_mapping:
+                        prediction_data.append(feature_mapping[feature])
                     else:
-                        prediction_data.append(0.0)  # Default value
-            
-            # Convert to DataFrame
-            X_pred = pd.DataFrame(np.array(prediction_data).reshape(1, -1), columns=feature_names)
+                        # Reasonable defaults based on feature type
+                        if 'fpflag' in feature:
+                            prediction_data.append(0)  # No false positive flags
+                        elif 'err' in feature:
+                            prediction_data.append(0.0)  # No uncertainty
+                        else:
+                            prediction_data.append(0.0)  # Default value
+                
+                # Convert to DataFrame
+                X_pred = pd.DataFrame(np.array(prediction_data).reshape(1, -1), columns=expected_features)
             
             # Make prediction
             try:
@@ -367,6 +450,46 @@ def create_prediction_form(model):
                     st.info("This object is classified as a Candidate. Further observation may confirm its planetary nature.")
                 else:
                     st.success("This object is classified as a Confirmed Planet. The transit signature strongly indicates an exoplanet.")
+                
+                # Show comparison with expected result if available
+                if hasattr(st.session_state, 'expected_result') and st.session_state.expected_result:
+                    expected = st.session_state.expected_result
+                    predicted = classes[max_idx]
+                    
+                    st.subheader("📊 Prediction vs Expected")
+                    
+                    # Create comparison columns
+                    comp_col1, comp_col2 = st.columns(2)
+                    
+                    with comp_col1:
+                        st.markdown("**Expected (NASA):**")
+                        if expected == 'CONFIRMED':
+                            st.success(f"✅ {expected}")
+                        elif expected == 'CANDIDATE':
+                            st.warning(f"⚠️ {expected}")
+                        else:
+                            st.error(f"❌ {expected}")
+                    
+                    with comp_col2:
+                        st.markdown("**Model Prediction:**")
+                        if max_idx == 2:  # Confirmed
+                            st.success(f"✅ {predicted}")
+                        elif max_idx == 1:  # Candidate
+                            st.warning(f"⚠️ {predicted}")
+                        else:  # False Positive
+                            st.error(f"❌ {predicted}")
+                    
+                    # Show if prediction matches expected
+                    if predicted == expected:
+                        st.success("🎉 **CORRECT!** Model prediction matches NASA's classification!")
+                    else:
+                        st.error(f"❌ **MISMATCH!** Expected {expected}, but model predicted {predicted}")
+                        
+                        # Provide insight into the mismatch
+                        if expected == 'CONFIRMED' and predicted == 'FALSE POSITIVE':
+                            st.info("💡 The model is being more conservative than NASA. This could indicate the model learned stricter criteria.")
+                        elif expected == 'FALSE POSITIVE' and predicted == 'CONFIRMED':
+                            st.info("💡 The model is more optimistic than NASA. This could indicate the model found additional planetary signals.")
                     
             except Exception as e:
                 st.error(f"Prediction error: {str(e)}")
