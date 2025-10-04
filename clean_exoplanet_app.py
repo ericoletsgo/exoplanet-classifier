@@ -465,26 +465,63 @@ def display_data_upload():
                         df_results['Candidate_Score'] = batch_probabilities[:, 1]
                         df_results['Confirmed_Score'] = batch_probabilities[:, 2]
                         
-                        # Summary statistics
+                        # Summary statistics with high-confidence highlights
                         st.subheader("Classification Summary")
                         
-                        col1, col2, col3, col4 = st.columns(4)
+                        # Calculate high-confidence classifications (>80% confidence)
+                        high_conf_threshold = 0.8
+                        high_conf_results = df_results[df_results['Confidence'] >= high_conf_threshold]
+                        
+                        col1, col2, col3, col4, col5 = st.columns(5)
                         
                         with col1:
                             confirmed_count = len(df_results[df_results['Prediction'] == 'Confirmed Planet'])
-                            st.metric("Confirmed Planets", confirmed_count)
+                            high_confirmed = len(high_conf_results[high_conf_results['Prediction'] == 'Confirmed Planet'])
+                            st.metric(
+                                "Confirmed Planets", 
+                                f"{confirmed_count} ({high_confirmed} high-conf)",
+                                delta=f"{high_confirmed} high confidence" if high_confirmed > 0 else None
+                            )
                         
                         with col2:
                             candidate_count = len(df_results[df_results['Prediction'] == 'Candidate'])
-                            st.metric("Candidates", candidate_count)
+                            high_candidates = len(high_conf_results[high_conf_results['Prediction'] == 'Candidate'])
+                            st.metric(
+                                "Candidates", 
+                                f"{candidate_count} ({high_candidates} high-conf)",
+                                delta=f"{high_candidates} high confidence" if high_candidates > 0 else None
+                            )
                         
                         with col3:
                             fp_count = len(df_results[df_results['Prediction'] == 'False Positive'])
-                            st.metric("False Positives", fp_count)
+                            high_fp = len(high_conf_results[high_conf_results['Prediction'] == 'False Positive'])
+                            st.metric(
+                                "False Positives", 
+                                f"{fp_count} ({high_fp} high-conf)",
+                                delta=f"{high_fp} high confidence" if high_fp > 0 else None
+                            )
                         
                         with col4:
                             avg_confidence = df_results['Confidence'].mean()
                             st.metric("Avg Confidence", f"{avg_confidence:.1%}")
+                        
+                        with col5:
+                            high_conf_count = len(high_conf_results)
+                            high_conf_percentage = (high_conf_count / len(df_results)) * 100 if len(df_results) > 0 else 0
+                            st.metric(
+                                "High Confidence", 
+                                f"{high_conf_count} objects",
+                                delta=f"{high_conf_percentage:.1f}%" if high_conf_percentage > 0 else None
+                            )
+                        
+                        # Dataset context information
+                        # Dataset context and TOI-specific interpretation
+                        is_toi_dataset = any(col in df.columns for col in ['toi', 'tid', 'tfopwg_disp'])
+                        if is_toi_dataset:
+                            st.info("**Dataset Context:** TESS Objects of Interest (TOI) dataset - these objects are "
+                                   "transit candidates requiring follow-up observation and confirmation.")
+                        else:
+                            st.info("**Dataset Context:** Exoplanet transit observations for classification analysis.")
                         
                         # Classification distribution
                         fig = px.pie(
@@ -494,25 +531,81 @@ def display_data_upload():
                         )
                         st.plotly_chart(fig, use_container_width=True)
                         
-                        # Results table
-                        st.subheader("Detailed Results")
+                        # High-confidence candidates section
+                        st.subheader("Most Promising High-Confidence Results")
+                        
+                        # Filter for high-confidence results only
+                        if len(high_conf_results) > 0:
+                            df_high_conf_sorted = high_conf_results.sort_values('Confidence', ascending=False)
+                            
+                            # Show top high-confidence results with TOI context
+                            st.write(f"**{len(high_conf_results)} objects classified with high confidence (≥{high_conf_threshold:.0%}):**")
+                            
+                            # Create enhanced display columns
+                            display_cols = ['Prediction', 'Confidence', 'FP_Score', 'Candidate_Score', 'Confirmed_Score']
+                            
+                            # Add TOI-specific columns if available
+                            toi_cols = []
+                            if is_toi_dataset:
+                                if 'toi' in df_results.columns:
+                                    toi_cols.append('toi')
+                                if 'tfopwg_disp' in df_results.columns:
+                                    toi_cols.append('tfopwg_disp')  # TESS follow-up status
+                            
+                            # Add physical parameter columns
+                            useful_cols = []
+                            for col in ['period', 'duration', 'depth', 'prad', 'steff', 'snr', 'pl_orbper', 'pl_trandurh', 'pl_trandep']:
+                                if col in df_results.columns:
+                                    useful_cols.append(col)
+                            
+                            # Combine display columns
+                            final_display_cols = display_cols + toi_cols + useful_cols[:4]
+                            
+                            # Highlight different prediction types
+                            tabs_for_predictions = st.tabs([
+                                f"Confirmed Planets ({len(df_high_conf_sorted[df_high_conf_sorted['Prediction']=='Confirmed Planet'])})",
+                                f"Candidates ({len(df_high_conf_sorted[df_high_conf_sorted['Prediction']=='Candidate'])})", 
+                                f"False Positives ({len(df_high_conf_sorted[df_high_conf_sorted['Prediction']=='False Positive'])})"
+                            ])
+                            
+                            prediction_types = ['Confirmed Planet', 'Candidate', 'False Positive']
+                            for i, prediction_type in enumerate(prediction_types):
+                                with tabs_for_predictions[i]:
+                                    subset = df_high_conf_sorted[df_high_conf_sorted['Prediction'] == prediction_type]
+                                    if len(subset) > 0:
+                                        st.dataframe(subset[final_display_cols], use_container_width=True)
+                                        
+                                        # Special insights for each category
+                                        if prediction_type == 'Confirmed Planet':
+                                            st.success(f"**{len(subset)} high-confidence confirmed planets!** These are the most reliable detections.")
+                                        elif prediction_type == 'Candidate':
+                                            st.info(f"**{len(subset)} high-confidence TOI candidates** - prioritize these for follow-up observations!")
+                                        else:
+                                            st.warning(f"**{len(subset)} high-confidence false positives** - reliably identified non-planetary signals.")
+                                    else:
+                                        st.info(f"No {prediction_type.lower()}s found with high confidence.")
+                        else:
+                            st.warning("No high-confidence classifications found. Consider checking data quality or model performance.")
+                        
+                        # All results table
+                        st.subheader("Complete Classification Results")
                         
                         # Sort by confidence (highest first)
                         df_sorted = df_results.sort_values('Confidence', ascending=False)
                         
-                        # Show top results
-                        st.write("**Top Classifications (by confidence):**")
+                        # Show top 15 most confident results
+                        st.write("**Top 15 Most Confident Classifications:**")
                         display_cols = ['Prediction', 'Confidence', 'FP_Score', 'Candidate_Score', 'Confirmed_Score']
                         
-                        # Add original data columns if they exist and are useful
+                        # Add useful physical parameters
                         useful_cols = []
-                        for col in ['period', 'duration', 'depth', 'prad', 'steff', 'snr']:
+                        for col in ['period', 'duration', 'depth', 'prad', 'steff', 'snr', 'pl_orbper', 'pl_trandurh', 'pl_trandep']:
                             if col in df_results.columns:
                                 useful_cols.append(col)
                         
-                        final_display_cols = display_cols + useful_cols[:3]  # Add up to 3 useful columns
+                        final_display_cols = display_cols + useful_cols[:4]
                         st.dataframe(
-                            df_sorted[final_display_cols].head(20),
+                            df_sorted[final_display_cols].head(15),
                             use_container_width=True
                         )
                         
@@ -525,20 +618,42 @@ def display_data_upload():
                             mime="text/csv"
                         )
                         
-                        # Insights
+                        # Enhanced insights with high-confidence focus
                         st.subheader("Key Insights")
                         
+                        if len(high_conf_results) > 0:
+                            high_conf_candidates = len(high_conf_results[high_conf_results['Prediction'] == 'Candidate'])
+                            high_conf_confirmed = len(high_conf_results[high_conf_results['Prediction'] == 'Confirmed Planet'])
+                            
+                            if high_conf_candidates > 0:
+                                st.success(f"PRIORITY: {high_conf_candidates} high-confidence candidate exoplanets identified! "
+                                         f"These TOI objects should be prioritized for follow-up observations.")
+                            
+                            if high_conf_confirmed > 0:
+                                st.success(f"CONFIRMED: {high_conf_confirmed} high-confidence confirmed planets detected! "
+                                         f"These are reliable exoplanet detections.")
+                            
+                            # Average confidence of high-confidence results
+                            avg_high_conf = high_conf_results['Confidence'].mean()
+                            st.info(f"High-confidence results average {avg_high_conf:.1%} confidence - excellent reliability!")
+                        
+                        # Original insights with enhanced context
                         if confirmed_count > candidate_count:
                             st.success(f"Dataset contains {confirmed_count} high-confidence exoplanet detections!")
                         elif candidate_count > confirmed_count:
                             st.info(f"Dataset has {candidate_count} promising candidate exoplanets requiring follow-up.")
                         
                         if avg_confidence > 0.8:
-                            st.success("High-confidence classifications with good data quality.")
+                            st.success("High-confidence classifications with excellent data quality.")
                         elif avg_confidence > 0.6:
                             st.warning("Moderate confidence - some classifications may need verification.")
                         else:
                             st.error("Low confidence classifications - check data quality and signal strength.")
+                        
+                        # TOI-specific recommendations
+                        if is_toi_dataset:
+                            st.info("TESS TOI Recommendation: Focus observational resources on high-confidence candidates "
+                                   "identified above for optimal discovery efficiency.")
                         
                     except Exception as e:
                         st.error(f"Batch classification error: {str(e)}")
