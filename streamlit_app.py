@@ -10,8 +10,15 @@ st.markdown(
     "Enter the orbital and transit parameters below. The model will predict whether the object is a confirmed planet, a candidate, or a false positive."
 )
 
-# Load the trained model
-model = joblib.load("model.joblib")
+# Load the trained model (rebuild if needed for compatibility)
+with st.spinner("Loading exoplanet classification model..."):
+    try:
+        from model_builder import get_or_create_model
+        model = get_or_create_model()
+        st.success("Model loaded successfully!")
+    except Exception as e:
+        st.error(f"Error loading model: {str(e)}")
+        st.stop()
 
 # Get actual feature names from the model
 preprocessor = model.named_steps['preprocess']
