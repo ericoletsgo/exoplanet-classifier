@@ -475,17 +475,25 @@ def create_prediction_form(model):
                     
                     st.subheader("📊 Prediction vs Expected")
                     
+                    # Map expected result to display format
+                    expected_mapping = {
+                        'FALSE POSITIVE': 'False Positive',
+                        'CANDIDATE': 'Candidate', 
+                        'CONFIRMED': 'Confirmed Planet'
+                    }
+                    expected_display = expected_mapping.get(expected, expected)
+                    
                     # Create comparison columns
                     comp_col1, comp_col2 = st.columns(2)
                     
                     with comp_col1:
                         st.markdown("**Expected (NASA):**")
                         if expected == 'CONFIRMED':
-                            st.success(f"✅ {expected}")
+                            st.success(f"✅ {expected_display}")
                         elif expected == 'CANDIDATE':
-                            st.warning(f"⚠️ {expected}")
+                            st.warning(f"⚠️ {expected_display}")
                         else:
-                            st.error(f"❌ {expected}")
+                            st.error(f"❌ {expected_display}")
                     
                     with comp_col2:
                         st.markdown("**Model Prediction:**")
@@ -496,30 +504,25 @@ def create_prediction_form(model):
                         else:  # False Positive
                             st.error(f"❌ {predicted}")
                     
-                    # Show if prediction matches expected
-                    if predicted == expected:
+                    # Show if prediction matches expected (compare display formats)
+                    if predicted == expected_display:
                         st.success("🎉 **CORRECT!** Model prediction matches NASA's classification!")
                     else:
-                        # Map the class names correctly
-                        class_mapping = {
-                            'FALSE POSITIVE': 'False Positive',
-                            'CANDIDATE': 'Candidate', 
-                            'CONFIRMED': 'Confirmed Planet'
-                        }
-                        expected_display = class_mapping.get(expected, expected)
-                        predicted_display = class_mapping.get(predicted, predicted)
-                        
-                        st.error(f"❌ **MISMATCH!** Expected {expected_display}, but model predicted {predicted_display}")
+                        st.error(f"❌ **MISMATCH!** Expected {expected_display}, but model predicted {predicted}")
                         
                         # Provide insight into the mismatch
-                        if expected == 'CONFIRMED' and predicted == 'False Positive':
+                        if expected == 'CONFIRMED' and max_idx == 0:  # Expected CONFIRMED, got False Positive
                             st.info("💡 The model is being more conservative than NASA. This could indicate the model learned stricter criteria.")
-                        elif expected == 'FALSE POSITIVE' and predicted == 'Confirmed Planet':
+                        elif expected == 'FALSE POSITIVE' and max_idx == 2:  # Expected FALSE POSITIVE, got Confirmed Planet
                             st.info("💡 The model is more optimistic than NASA. This could indicate the model found additional planetary signals.")
-                        elif expected == 'CANDIDATE' and predicted == 'False Positive':
+                        elif expected == 'CANDIDATE' and max_idx == 0:  # Expected CANDIDATE, got False Positive
                             st.info("💡 The model is more conservative, classifying a candidate as a false positive.")
-                        elif expected == 'CANDIDATE' and predicted == 'Confirmed Planet':
+                        elif expected == 'CANDIDATE' and max_idx == 2:  # Expected CANDIDATE, got Confirmed Planet
                             st.info("💡 The model is more optimistic, upgrading a candidate to confirmed planet.")
+                        elif expected == 'CONFIRMED' and max_idx == 1:  # Expected CONFIRMED, got Candidate
+                            st.info("💡 The model is more conservative, downgrading a confirmed planet to candidate.")
+                        elif expected == 'FALSE POSITIVE' and max_idx == 1:  # Expected FALSE POSITIVE, got Candidate
+                            st.info("💡 The model is more optimistic, upgrading a false positive to candidate.")
                     
             except Exception as e:
                 st.error(f"Prediction error: {str(e)}")
