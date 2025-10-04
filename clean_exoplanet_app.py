@@ -274,28 +274,48 @@ def display_data_upload():
                 # Try multiple parsing strategies for flexibility
                 df = None
                 parsing_strategies = [
-                    {'comment': '#', 'encoding': 'utf-8'},
-                    {'comment': '#', 'encoding': 'latin-1'},
-                    {'encoding': 'utf-8', 'on_bad_lines': 'skip'},
-                    {'encoding': 'latin-1', 'on_bad_lines': 'skip'},
+                    # Best strategies first
+                    {'comment': '#', 'encoding': 'utf-8', 'on_bad_lines': 'skip', 'skipinitialspace': True},
                     {'comment': '#', 'encoding': 'utf-8', 'on_bad_lines': 'skip'},
+                    {'comment': '#', 'encoding': 'utf-8', 'error_bad_lines': False},  # pandas < 1.3
+                    {'comment': '#', 'encoding': 'utf-8'},
+                    {'comment': '#', 'encoding': 'latin-1', 'on_bad_lines': 'skip'},
+                    {'encoding': 'utf-8', 'on_bad_lines': 'skip', 'skipinitialspace': True},
+                    {'encoding': 'latin-1', 'on_bad_lines': 'skip'},
+                    {'encoding': 'utf-8', 'error_bad_lines': False},  # pandas < 1.3
                     {'encoding': 'utf-8'}  # fallback original
                 ]
                 
-                for strategy in parsing_strategies:
+                successful_method = None
+                for i, strategy in enumerate(parsing_strategies):
                     try:
                         uploaded_file.seek(0)  # Reset file pointer
                         df = pd.read_csv(uploaded_file, **strategy)
                         if len(df) > 0:  # Success if we got data
+                            successful_method = strategy
                             break
                     except Exception as e:
-                        st.write(f"Tried parsing method, skipping to next...")
+                        if i < 3:  # Show first few attempts
+                            st.write(f"Method {i+1} failed: {type(e).__name__}, trying next...")
                         continue
                 
                 if df is None or len(df) == 0:
                     raise Exception("Could not parse CSV file with any standard method. Please check file format.")
                 
-                st.success(f"Successfully loaded {df.shape[0]} rows and {df.shape[1]} columns using flexible parsing!")
+                # Show which method worked
+                method_info = f"Using parsing with comments='#' and error handling"
+                if successful_method:
+                    method_details = []
+                    if 'comment' in successful_method:
+                        method_details.append('comments (#)')
+                    if 'on_bad_lines' in successful_method or 'error_bad_lines' in successful_method:
+                        method_details.append('bad line handling')
+                    if 'skipinitialspace' in successful_method:
+                        method_details.append('spacing cleanup')
+                    method_info = f"Success with: {', '.join(method_details)}"
+                
+                st.success(f"Successfully loaded {df.shape[0]} rows and {df.shape[1]} columns!")
+                st.info(f"Parsing method: {method_info}")
                 
                 # Display sample data
                 st.subheader("Sample Data")
