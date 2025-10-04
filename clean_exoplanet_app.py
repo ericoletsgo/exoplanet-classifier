@@ -271,8 +271,31 @@ def display_data_upload():
         
         if uploaded_file is not None:
             try:
-                df = pd.read_csv(uploaded_file)
-                st.success(f"Successfully loaded {df.shape[0]} rows and {df.shape[1]} columns")
+                # Try multiple parsing strategies for flexibility
+                df = None
+                parsing_strategies = [
+                    {'comment': '#', 'encoding': 'utf-8'},
+                    {'comment': '#', 'encoding': 'latin-1'},
+                    {'encoding': 'utf-8', 'on_bad_lines': 'skip'},
+                    {'encoding': 'latin-1', 'on_bad_lines': 'skip'},
+                    {'comment': '#', 'encoding': 'utf-8', 'on_bad_lines': 'skip'},
+                    {'encoding': 'utf-8'}  # fallback original
+                ]
+                
+                for strategy in parsing_strategies:
+                    try:
+                        uploaded_file.seek(0)  # Reset file pointer
+                        df = pd.read_csv(uploaded_file, **strategy)
+                        if len(df) > 0:  # Success if we got data
+                            break
+                    except Exception as e:
+                        st.write(f"Tried parsing method, skipping to next...")
+                        continue
+                
+                if df is None or len(df) == 0:
+                    raise Exception("Could not parse CSV file with any standard method. Please check file format.")
+                
+                st.success(f"Successfully loaded {df.shape[0]} rows and {df.shape[1]} columns using flexible parsing!")
                 
                 # Display sample data
                 st.subheader("Sample Data")
@@ -303,6 +326,22 @@ def display_data_upload():
                     
             except Exception as e:
                 st.error(f"Error processing file: {str(e)}")
+                st.error("Troubleshooting tips:")
+                st.error("• File may have inconsistent columns - check for missing headers")
+                st.error("• File may contain comment lines starting with #")
+                st.error("• Try exporting from Excel/Google Sheets as 'CSV UTF-8' format")
+                st.error("• Ensure CSV uses comma separators (not semicolons)")
+                
+                # Show first few lines to help debug
+                try:
+                    uploaded_file.seek(0)
+                    content = uploaded_file.read().decode('utf-8', errors='ignore')
+                    lines = content.split('\n')[:5]
+                    st.text("First 5 lines of file:")
+                    for i, line in enumerate(lines, 1):
+                        st.text(f"Line {i}: {line[:100]}...")  # Show first 100 chars
+                except:
+                    pass
     
     with tab2:
         st.subheader("Example Dataset Analysis")
