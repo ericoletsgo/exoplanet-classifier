@@ -166,6 +166,8 @@ def load_random_example(example_type):
             filtered_df = df[df['koi_disposition'] == 'CONFIRMED']
         elif example_type == "candidate":
             filtered_df = df[df['koi_disposition'] == 'CANDIDATE']
+        elif example_type == "false_positive":
+            filtered_df = df[df['koi_disposition'] == 'FALSE POSITIVE']
         else:
             return None
             
@@ -186,6 +188,8 @@ def load_random_example(example_type):
             'srad': random_row.get('koi_srad', 1.0),
             'smass': random_row.get('koi_smass', 1.0),
             'expected': random_row['koi_disposition'],
+            'row_index': random_row.name,  # Store the original row index
+            'koi_name': random_row.get('kepoi_name', 'Unknown'),  # Store KOI name if available
             # Store the actual row data for proper prediction
             'actual_row': random_row
         }
@@ -203,14 +207,17 @@ def create_prediction_form(model):
     with col1:
         st.subheader("Orbital Parameters")
         
-        # Add random example button
-        col_btn1, col_btn2 = st.columns([1, 1])
+        # Add random example buttons
+        col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 1])
         with col_btn1:
             if st.button("🎲 Random Confirmed Planet", help="Load a random confirmed exoplanet example"):
                 st.session_state.random_example = "confirmed"
         with col_btn2:
             if st.button("🎲 Random Candidate", help="Load a random candidate exoplanet example"):
                 st.session_state.random_example = "candidate"
+        with col_btn3:
+            if st.button("🎲 Random False Positive", help="Load a random false positive example"):
+                st.session_state.random_example = "false_positive"
         
         # Load random example if requested
         if hasattr(st.session_state, 'random_example') and st.session_state.random_example:
@@ -228,6 +235,10 @@ def create_prediction_form(model):
                 st.session_state.smass = random_data['smass']
                 st.session_state.expected_result = random_data['expected']
                 st.session_state.actual_row_data = random_data['actual_row']
+                st.session_state.row_info = {
+                    'index': random_data['row_index'],
+                    'koi_name': random_data['koi_name']
+                }
                 # Clear the flag
                 st.session_state.random_example = None
         
@@ -344,6 +355,12 @@ def create_prediction_form(model):
         # Show expected result if we loaded a random example
         if hasattr(st.session_state, 'expected_result') and st.session_state.expected_result:
             expected = st.session_state.expected_result
+            
+            # Show row information
+            if hasattr(st.session_state, 'row_info') and st.session_state.row_info:
+                row_info = st.session_state.row_info
+                st.info(f"📊 Data Source: Row {row_info['index']} from koi.csv (KOI: {row_info['koi_name']})")
+            
             if expected == 'CONFIRMED':
                 st.success(f"📋 Expected Result: {expected} (Real confirmed exoplanet)")
             elif expected == 'CANDIDATE':
@@ -483,13 +500,26 @@ def create_prediction_form(model):
                     if predicted == expected:
                         st.success("🎉 **CORRECT!** Model prediction matches NASA's classification!")
                     else:
-                        st.error(f"❌ **MISMATCH!** Expected {expected}, but model predicted {predicted}")
+                        # Map the class names correctly
+                        class_mapping = {
+                            'FALSE POSITIVE': 'False Positive',
+                            'CANDIDATE': 'Candidate', 
+                            'CONFIRMED': 'Confirmed Planet'
+                        }
+                        expected_display = class_mapping.get(expected, expected)
+                        predicted_display = class_mapping.get(predicted, predicted)
+                        
+                        st.error(f"❌ **MISMATCH!** Expected {expected_display}, but model predicted {predicted_display}")
                         
                         # Provide insight into the mismatch
-                        if expected == 'CONFIRMED' and predicted == 'FALSE POSITIVE':
+                        if expected == 'CONFIRMED' and predicted == 'False Positive':
                             st.info("💡 The model is being more conservative than NASA. This could indicate the model learned stricter criteria.")
-                        elif expected == 'FALSE POSITIVE' and predicted == 'CONFIRMED':
+                        elif expected == 'FALSE POSITIVE' and predicted == 'Confirmed Planet':
                             st.info("💡 The model is more optimistic than NASA. This could indicate the model found additional planetary signals.")
+                        elif expected == 'CANDIDATE' and predicted == 'False Positive':
+                            st.info("💡 The model is more conservative, classifying a candidate as a false positive.")
+                        elif expected == 'CANDIDATE' and predicted == 'Confirmed Planet':
+                            st.info("💡 The model is more optimistic, upgrading a candidate to confirmed planet.")
                     
             except Exception as e:
                 st.error(f"Prediction error: {str(e)}")
