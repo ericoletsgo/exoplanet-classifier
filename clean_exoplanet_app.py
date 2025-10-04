@@ -341,8 +341,209 @@ def display_data_upload():
                         st.warning("No numeric columns found for analysis")
                 
                 # Batch prediction option
-                if st.button("Classify All Objects"):
-                    st.info("Batch classification feature would be implemented here")
+                if st.button("Classify All Objects", type="primary"):
+                    try:
+                        st.subheader("Batch Classification Results")
+                        
+                        # Load model for batch prediction
+                        batch_model = load_model()
+                        if batch_model is None:
+                            st.error("Cannot perform batch classification: model not available")
+                            return
+                        
+                        # Get numeric columns for prediction
+                        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+                        
+                        # Clean the data
+                        df_clean = df[numeric_cols].fillna(0).copy()
+                        
+                        # Show data preparation status
+                        st.info(f"Processing {len(df_clean)} objects with {len(numeric_cols)} numeric features...")
+                        
+                        # Progress bar
+                        progress_bar = st.progress(0)
+                        status_text = st.empty()
+                        
+                        # Map feature names (handle different dataset formats)
+                        feature_names = batch_model.named_steps['preprocess'].transformers_[0][2]
+                        
+                        # Feature mapping for different datasets
+                        feature_mapping = {}
+                        
+                        # Common feature mappings
+                        common_mappings = {
+                            # Period features
+                            'period': ['koi_period', 'pl_orbper', 'tce_period'],
+                            'period_err': ['koi_period_err1', 'pl_orbpererr1', 'tce_period1'],
+                            # Duration features  
+                            'duration': ['koi_duration', 'pl_trandurh', 'tce_duration'],
+                            'duration_err': ['koi_duration_err1', 'pl_trandurherr1', 'tce_duration1'],
+                            # Depth features
+                            'depth': ['koi_depth', 'pl_trandep', 'tce_depth'],
+                            'depth_err': ['koi_depth_err1', 'pl_trandeperr1', 'tce_depth1'],
+                            # Radius features
+                            'prad': ['koi_prad', 'pl_rade', 'tce_prad'],
+                            'prad_err': ['koi_prad_err1', 'pl_radeerr1', 'tce_prad1'],
+                            # Impact parameter
+                            'impact': ['koi_impact', 'impact_param'],
+                            # Signal-to-noise
+                            'snr': ['koi_model_snr', 'snr'],
+                            # Stellar properties
+                            'steff': ['koi_steff', 'st_teff', 'stellar_teff'],
+                            'steff_err': ['koi_steff_err1', 'st_tefferr1'],
+                            'srad': ['koi_srad', 'st_rad', 'stellar_radius'],
+                            'srad_err': ['koi_srad_err1', 'st_raderr1'],
+                            'smass': ['koi_smass', 'stellar_mass']
+                        }
+                        
+                        # Build comprehensive feature mapping
+                        for target_family, possible_names in common_mappings.items():
+                            for possible_name in possible_names:
+                                if possible_name in df_clean.columns:
+                                    feature_mapping[possible_name] = target_family
+                        
+                        # Create prediction matrix
+                        prediction_matrix = []
+                        
+                        for idx, row in df_clean.iterrows():
+                            # Update progress
+                            progress = (idx + 1) / len(df_clean)
+                            progress_bar.progress(progress)
+                            status_text.text(f"Classifying object {idx + 1} of {len(df_clean)}...")
+                            
+                            # Build feature vector
+                            feature_values = []
+                            for feature_name in feature_names:
+                                # Try direct mapping first
+                                if feature_name in df_clean.columns:
+                                    feature_values.append(row[feature_name])
+                                else:
+                                    # Try feature family mapping
+                                    mapped = False
+                                    if 'period' in feature_name.lower():
+                                        if 'period' in df_clean.columns:
+                                            feature_values.append(row['period'])
+                                            mapped = True
+                                    elif 'duration' in feature_name.lower():
+                                        if 'duration' in df_clean.columns:
+                                            feature_values.append(row['duration'])
+                                            mapped = True
+                                    elif 'depth' in feature_name.lower():
+                                        if 'depth' in df_clean.columns:
+                                            feature_values.append(row['depth'])
+                                            mapped = True
+                                    
+                                    if not mapped:
+                                        # Default values
+                                        if 'fpflag' in feature_name.lower():
+                                            feature_values.append(0)  # No false positive flags
+                                        elif 'err' in feature_name.lower():
+                                            feature_values.append(0.0)  # No uncertainty
+                                        else:
+                                            feature_values.append(0.0)  # Default
+                            
+                            prediction_matrix.append(feature_values)
+                        
+                        # Convert to DataFrame for prediction
+                        X_batch = pd.DataFrame(prediction_matrix, columns=feature_names)
+                        
+                        # Make batch predictions
+                        status_text.text("Making predictions...")
+                        batch_predictions = batch_model.predict(X_batch)
+                        batch_probabilities = batch_model.predict_proba(X_batch)
+                        
+                        # Clear progress
+                        progress_bar.progress(1.0)
+                        status_text.text("Classification complete!")
+                        
+                        # Add predictions to dataframe
+                        inv_label_map = {0: "False Positive", 1: "Candidate", 2: "Confirmed Planet"}
+                        df_results = df_clean.copy()
+                        df_results['Prediction'] = [inv_label_map[pred] for pred in batch_predictions]
+                        df_results['Confidence'] = [max(proba) for proba in batch_probabilities]
+                        df_results['FP_Score'] = batch_probabilities[:, 0]
+                        df_results['Candidate_Score'] = batch_probabilities[:, 1]
+                        df_results['Confirmed_Score'] = batch_probabilities[:, 2]
+                        
+                        # Summary statistics
+                        st.subheader("Classification Summary")
+                        
+                        col1, col2, col3, col4 = st.columns(4)
+                        
+                        with col1:
+                            confirmed_count = len(df_results[df_results['Prediction'] == 'Confirmed Planet'])
+                            st.metric("Confirmed Planets", confirmed_count)
+                        
+                        with col2:
+                            candidate_count = len(df_results[df_results['Prediction'] == 'Candidate'])
+                            st.metric("Candidates", candidate_count)
+                        
+                        with col3:
+                            fp_count = len(df_results[df_results['Prediction'] == 'False Positive'])
+                            st.metric("False Positives", fp_count)
+                        
+                        with col4:
+                            avg_confidence = df_results['Confidence'].mean()
+                            st.metric("Avg Confidence", f"{avg_confidence:.1%}")
+                        
+                        # Classification distribution
+                        fig = px.pie(
+                            df_results,
+                            names='Prediction',
+                            title='Batch Classification Distribution'
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        # Results table
+                        st.subheader("Detailed Results")
+                        
+                        # Sort by confidence (highest first)
+                        df_sorted = df_results.sort_values('Confidence', ascending=False)
+                        
+                        # Show top results
+                        st.write("**Top Classifications (by confidence):**")
+                        display_cols = ['Prediction', 'Confidence', 'FP_Score', 'Candidate_Score', 'Confirmed_Score']
+                        
+                        # Add original data columns if they exist and are useful
+                        useful_cols = []
+                        for col in ['period', 'duration', 'depth', 'prad', 'steff', 'snr']:
+                            if col in df_results.columns:
+                                useful_cols.append(col)
+                        
+                        final_display_cols = display_cols + useful_cols[:3]  # Add up to 3 useful columns
+                        st.dataframe(
+                            df_sorted[final_display_cols].head(20),
+                            use_container_width=True
+                        )
+                        
+                        # Download option
+                        csv_data = df_sorted.to_csv(index=False)
+                        st.download_button(
+                            label="Download Complete Results (CSV)",
+                            data=csv_data,
+                            file_name="exoplanet_classification_results.csv",
+                            mime="text/csv"
+                        )
+                        
+                        # Insights
+                        st.subheader("Key Insights")
+                        
+                        if confirmed_count > candidate_count:
+                            st.success(f"Dataset contains {confirmed_count} high-confidence exoplanet detections!")
+                        elif candidate_count > confirmed_count:
+                            st.info(f"Dataset has {candidate_count} promising candidate exoplanets requiring follow-up.")
+                        
+                        if avg_confidence > 0.8:
+                            st.success("High-confidence classifications with good data quality.")
+                        elif avg_confidence > 0.6:
+                            st.warning("Moderate confidence - some classifications may need verification.")
+                        else:
+                            st.error("Low confidence classifications - check data quality and signal strength.")
+                        
+                    except Exception as e:
+                        st.error(f"Batch classification error: {str(e)}")
+                        st.error("This dataset may have incompatible features with the trained model.")
+                        st.info("Try using the individual classification form instead.")
                     
             except Exception as e:
                 st.error(f"Error processing file: {str(e)}")
