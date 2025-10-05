@@ -456,13 +456,131 @@ async def get_metrics():
 async def train_model(request: TrainingRequest, background_tasks: BackgroundTasks):
     """Trigger model training (runs in background)"""
     try:
-        # For now, return a message that training is not implemented in API
-        # In production, you'd use Celery or similar for background tasks
+        # Load the dataset
+        dataset_path = os.path.join(DATA_DIR, request.dataset)
+        if not os.path.exists(dataset_path):
+            raise HTTPException(status_code=404, detail=f"Dataset not found: {request.dataset}")
+        
+        # Load and prepare data
+        df = pd.read_csv(dataset_path, comment='#')
+        df['target'] = df['koi_disposition'].map({'CONFIRMED': 2, 'CANDIDATE': 1, 'FALSE POSITIVE': 0})
+        df = df[df['target'].notna()]
+        
+        # Get feature names from existing model
+        existing_model = load_model()
+        feature_names = get_feature_names(existing_model)
+        
+        # Filter to available features
+        available_features = [f for f in feature_names if f in df.columns]
+        
+        # Prepare features and target
+        X = df[available_features].fillna(0)
+        y = df['target'].astype(int)
+        
+        # Split data
+        from sklearn.model_selection import train_test_split
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42, stratify=y
+        )
+        
+        # Create a simple ensemble model (same as the main model)
+        from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier, VotingClassifier
+        from sklearn.preprocessing import StandardScaler
+        from sklearn.impute import SimpleImputer
+        from sklearn.pipeline import Pipeline
+        
+        # Try to import optional dependencies
+        models = []
+        
+        # Always include basic models
+        models.append(('gradient_boosting', GradientBoostingClassifier(n_estimators=100, random_state=42)))
+        models.append(('random_forest', RandomForestClassifier(n_estimators=100, random_state=42)))
+        
+        # Try XGBoost
+        try:
+            import xgboost as xgb
+            models.append(('xgboost', xgb.XGBClassifier(n_estimators=100, random_state=42, eval_metric='logloss')))
+        except ImportError:
+            pass
+            
+        # Try LightGBM
+        try:
+            import lightgbm as lgb
+            models.append(('lightgbm', lgb.LGBMClassifier(n_estimators=100, random_state=42, verbose=-1)))
+        except ImportError:
+            pass
+        
+        # Create pipeline
+        pipeline = Pipeline([
+            ('preprocess', Pipeline([
+                ('imputer', SimpleImputer(strategy='median')),
+                ('scaler', StandardScaler())
+            ])),
+            ('ensemble', VotingClassifier(models, voting='soft'))
+        ])
+        
+        # Train the model
+        pipeline.fit(X_train, y_train)
+        
+        # Evaluate
+        from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+        y_pred = pipeline.predict(X_test)
+        
+        metrics = {
+            'accuracy': float(accuracy_score(y_test, y_pred)),
+            'precision': float(precision_score(y_test, y_pred, average='weighted', zero_division=0)),
+            'recall': float(recall_score(y_test, y_pred, average='weighted', zero_division=0)),
+            'f1_score': float(f1_score(y_test, y_pred, average='weighted', zero_division=0)),
+            'train_samples': len(X_train),
+            'test_samples': len(X_test),
+            'n_features': len(available_features)
+        }
+        
+        # Generate model ID
+        model_id = f"model_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        
+        # Save model (in production, you'd save to a proper model store)
+        model_path = os.path.join(MODELS_DIR, f"{model_id}.joblib")
+        os.makedirs(MODELS_DIR, exist_ok=True)
+        
+        # Add metadata to model
+        pipeline.model_id = model_id
+        pipeline.model_name = request.model_name
+        pipeline.description = request.description
+        pipeline.metrics = metrics
+        pipeline.feature_names = available_features
+        pipeline.created_at = datetime.now().isoformat()
+        
+        joblib.dump(pipeline, model_path)
+        
+        # Update models metadata
+        metadata_file = os.path.join(MODELS_DIR, "models_metadata.json")
+        if os.path.exists(metadata_file):
+            with open(metadata_file, 'r') as f:
+                metadata = json.load(f)
+        else:
+            metadata = []
+        
+        model_metadata = {
+            'id': model_id,
+            'name': request.model_name,
+            'description': request.description,
+            'created_at': pipeline.created_at,
+            'metrics': metrics,
+            'feature_names': available_features,
+            'model_path': model_path
+        }
+        
+        metadata.append(model_metadata)
+        
+        with open(metadata_file, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        
         return TrainingResponse(
-            status="not_implemented",
-            message="Training endpoint is not yet implemented. Please use the Streamlit interface or training scripts.",
-            model_id=None,
-            metrics=None
+            status="completed",
+            message=f"Model trained successfully with {metrics['accuracy']:.1%} accuracy",
+            model_id=model_id,
+            metrics=metrics
         )
         
     except Exception as e:
@@ -587,6 +705,46 @@ async def list_models():
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list models: {str(e)}")
+
+@app.options("/feature-correlations")
+@app.get("/feature-correlations")
+async def get_feature_correlations():
+    """Get feature correlation matrix for visualization"""
+    try:
+        # Load a sample of the dataset for correlation analysis
+        koi_path = os.path.join(DATA_DIR, "koi.csv")
+        if not os.path.exists(koi_path):
+            raise HTTPException(status_code=404, detail="Dataset not found")
+        
+        # Load a sample of the data
+        df = pd.read_csv(koi_path, comment='#')
+        
+        # Get the relevant features used by the model
+        model = load_model()
+        feature_names = get_feature_names(model)
+        
+        # Filter to only features that exist in the dataset
+        available_features = [f for f in feature_names if f in df.columns]
+        
+        # Take a sample for performance (correlation computation can be expensive)
+        sample_size = min(5000, len(df))
+        df_sample = df[available_features].sample(n=sample_size, random_state=42)
+        
+        # Calculate correlation matrix
+        correlation_matrix = df_sample.corr()
+        
+        # Convert to format suitable for frontend
+        correlations = {
+            "features": list(correlation_matrix.columns),
+            "matrix": correlation_matrix.values.tolist(),
+            "sample_size": sample_size,
+            "total_features": len(available_features)
+        }
+        
+        return correlations
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to calculate correlations: {str(e)}")
 
 # Add static file serving for production
 from fastapi.staticfiles import StaticFiles

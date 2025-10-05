@@ -152,6 +152,28 @@ class APIClient {
       raw_row: Record<string, any>
     }>(url)
   }
+
+  async getFeatureCorrelations() {
+    return this.request<{
+      features: string[]
+      matrix: number[][]
+      sample_size: number
+      total_features: number
+    }>('/feature-correlations')
+  }
+
+  async trainModel(data: { dataset: string; model_name: string; description: string }) {
+    return this.request<{
+      status: string
+      message: string
+      model_id?: string
+      metrics?: Record<string, any>
+    }>('/train', {
+      method: 'POST',
+      body: JSON.stringify(data),
+      timeout: 120000 // 2 minute timeout for training
+    })
+  }
 }
 
 export const api = new APIClient()

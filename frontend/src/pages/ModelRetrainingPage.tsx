@@ -55,8 +55,8 @@ export default function ModelRetrainingPage() {
   }
 
   const handleTrainModel = async () => {
-    if (!uploadedFile || !modelName) {
-      setError('Please provide a model name and upload a CSV file')
+    if (!modelName) {
+      setError('Please provide a model name')
       return
     }
 
@@ -65,14 +65,16 @@ export default function ModelRetrainingPage() {
     setUploadProgress('')
 
     try {
-      // This would need to be implemented in the API
-      // For now, show a placeholder
       setUploadProgress('Training model... This may take a few minutes.')
       
-      // Simulate training progress
-      await new Promise(resolve => setTimeout(resolve, 3000))
+      // Call the actual training API
+      const result = await api.trainModel({
+        dataset: 'koi.csv', // Use the default dataset for now
+        model_name: modelName,
+        description: description
+      })
       
-      setUploadProgress('Model training completed!')
+      setUploadProgress(`Model training completed! Accuracy: ${(result.metrics?.accuracy * 100).toFixed(1)}%`)
       await loadModels() // Refresh models list
       
     } catch (err) {
