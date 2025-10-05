@@ -1,5 +1,11 @@
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api'
 
+// Debug logging
+if (typeof window !== 'undefined') {
+  console.log('API_BASE_URL:', API_BASE_URL)
+  console.log('VITE_API_URL env var:', import.meta.env.VITE_API_URL)
+}
+
 export interface PredictionRequest {
   features: Record<string, number>
 }
