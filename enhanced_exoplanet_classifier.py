@@ -1,18 +1,22 @@
 """
 Clean Professional Exoplanet Classification Interface
 Modern, minimalist design for researchers and scientists
+With Model Retraining and Versioning Support
 """
 import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
 import os
+import json
+from datetime import datetime
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier, VotingClassifier
-from sklearn.model_selection import cross_val_score
+from sklearn.model_selection import cross_val_score, train_test_split
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix, classification_report
 import plotly.express as px
 import plotly.graph_objects as go
 
@@ -45,6 +49,178 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+# Model versioning constants
+MODELS_DIR = "models"
+MODELS_METADATA_FILE = "models/models_metadata.json"
+
+# Define relevant features based on user requirements (expanded from original model)
+RELEVANT_FEATURES = {
+    # Stellar parameters (position, magnitude, temperature, metallicity)
+    'stellar': [
+        'koi_steff', 'koi_steff_err1', 'koi_steff_err2',  # Temperature
+        'koi_srad', 'koi_srad_err1', 'koi_srad_err2',  # Radius
+        'koi_smass', 'koi_smass_err1', 'koi_smass_err2',  # Mass
+        'koi_slogg', 'koi_slogg_err1', 'koi_slogg_err2',  # Surface gravity
+        'koi_smet', 'koi_smet_err1', 'koi_smet_err2',  # Metallicity
+        'ra', 'dec',  # Position
+        'koi_kepmag', 'koi_gmag', 'koi_rmag', 'koi_imag', 'koi_zmag',  # Magnitudes
+        'koi_jmag', 'koi_hmag', 'koi_kmag'  # IR magnitudes
+    ],
+    
+    # Exoplanet parameters (mass and orbital information)
+    'orbital': [
+        'koi_period', 'koi_period_err1', 'koi_period_err2',  # Orbital period
+        'koi_duration', 'koi_duration_err1', 'koi_duration_err2',  # Transit duration
+        'koi_depth', 'koi_depth_err1', 'koi_depth_err2',  # Transit depth
+        'koi_prad', 'koi_prad_err1', 'koi_prad_err2',  # Planet radius
+        'koi_impact', 'koi_impact_err1', 'koi_impact_err2',  # Impact parameter
+        'koi_eccen',  # Eccentricity
+        'koi_time0', 'koi_time0_err1', 'koi_time0_err2',  # Transit epoch
+        'koi_time0bk', 'koi_time0bk_err1', 'koi_time0bk_err2',  # Barycentric epoch
+        'koi_ror', 'koi_ror_err1', 'koi_ror_err2',  # Planet-star radius ratio
+        'koi_srho', 'koi_srho_err1', 'koi_srho_err2',  # Stellar density
+        'koi_sma',  # Semi-major axis
+        'koi_incl',  # Inclination
+        'koi_teq',  # Equilibrium temperature
+        'koi_insol', 'koi_insol_err1', 'koi_insol_err2',  # Insolation flux
+        'koi_dor', 'koi_dor_err1', 'koi_dor_err2'  # Planet-star distance ratio
+    ],
+    
+    # Signal quality (light curve or radial velocity curve categorization)
+    'signal': [
+        'koi_model_snr',  # Transit signal-to-noise
+        'koi_max_mult_ev', 'koi_max_sngle_ev',  # Event statistics
+        'koi_tce_plnt_num',  # TCE planet number
+        'koi_bin_oedp_sig',  # Binary discrimination
+        'koi_ldm_coeff1', 'koi_ldm_coeff2', 'koi_ldm_coeff3', 'koi_ldm_coeff4',  # Limb darkening
+        'koi_fwm_stat_sig',  # Flux-weighted centroid statistic
+        'koi_fwm_sra', 'koi_fwm_sra_err', 'koi_fwm_sdec', 'koi_fwm_sdec_err',  # Source position
+        'koi_fwm_srao', 'koi_fwm_srao_err', 'koi_fwm_sdeco', 'koi_fwm_sdeco_err',  # Out-of-transit position
+        'koi_fwm_prao', 'koi_fwm_prao_err', 'koi_fwm_pdeco', 'koi_fwm_pdeco_err',  # Difference
+        'koi_dicco_mra', 'koi_dicco_mra_err', 'koi_dicco_mdec', 'koi_dicco_mdec_err',  # Centroid offset
+        'koi_dicco_msky', 'koi_dicco_msky_err',  # Sky offset
+        'koi_dikco_mra', 'koi_dikco_mra_err', 'koi_dikco_mdec', 'koi_dikco_mdec_err',  # KIC offset
+        'koi_dikco_msky', 'koi_dikco_msky_err'  # KIC sky offset
+    ]
+}
+
+def get_all_relevant_features():
+    """Get all relevant features as a flat list"""
+    all_features = []
+    for category in RELEVANT_FEATURES.values():
+        all_features.extend(category)
+    return all_features
+
+def ensure_models_directory():
+    """Create models directory if it doesn't exist"""
+    if not os.path.exists(MODELS_DIR):
+        os.makedirs(MODELS_DIR)
+
+def load_models_metadata():
+    """Load models metadata from JSON file"""
+    ensure_models_directory()
+    if os.path.exists(MODELS_METADATA_FILE):
+        with open(MODELS_METADATA_FILE, 'r') as f:
+            return json.load(f)
+    return []
+
+def save_models_metadata(metadata):
+    """Save models metadata to JSON file"""
+    ensure_models_directory()
+    with open(MODELS_METADATA_FILE, 'w') as f:
+        json.dump(metadata, f, indent=2)
+
+def get_model_path(model_id):
+    """Get the file path for a model"""
+    return os.path.join(MODELS_DIR, f"model_{model_id}.joblib")
+
+def train_new_model(X_train, y_train, X_test, y_test, model_name, description=""):
+    """Train a new model and save with metadata"""
+    try:
+        # Create models
+        models = []
+        models.append(('gradient_boosting', GradientBoostingClassifier(n_estimators=100, random_state=42)))
+        models.append(('random_forest', RandomForestClassifier(n_estimators=100, random_state=42)))
+        
+        # Try XGBoost
+        try:
+            import xgboost as xgb
+            models.append(('xgboost', xgb.XGBClassifier(n_estimators=100, random_state=42, eval_metric='mlogloss')))
+        except ImportError:
+            pass
+            
+        # Try LightGBM
+        try:
+            import lightgbm as lgb
+            models.append(('lightgbm', lgb.LGBMClassifier(n_estimators=100, random_state=42, verbose=-1)))
+        except ImportError:
+            pass
+        
+        # Create ensemble
+        ensemble = VotingClassifier(models, voting='soft')
+        
+        # Train
+        ensemble.fit(X_train, y_train)
+        
+        # Evaluate
+        y_pred_train = ensemble.predict(X_train)
+        y_pred_test = ensemble.predict(X_test)
+        
+        train_accuracy = accuracy_score(y_train, y_pred_train)
+        test_accuracy = accuracy_score(y_test, y_pred_test)
+        
+        # Calculate additional metrics
+        precision = precision_score(y_test, y_pred_test, average='weighted', zero_division=0)
+        recall = recall_score(y_test, y_pred_test, average='weighted', zero_division=0)
+        f1 = f1_score(y_test, y_pred_test, average='weighted', zero_division=0)
+        
+        # Get confusion matrix
+        cm = confusion_matrix(y_test, y_pred_test)
+        
+        # Create model metadata
+        model_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        metadata = {
+            'id': model_id,
+            'name': model_name,
+            'description': description,
+            'created_at': datetime.now().isoformat(),
+            'train_samples': len(X_train),
+            'test_samples': len(X_test),
+            'train_accuracy': float(train_accuracy),
+            'test_accuracy': float(test_accuracy),
+            'precision': float(precision),
+            'recall': float(recall),
+            'f1_score': float(f1),
+            'confusion_matrix': cm.tolist(),
+            'features': X_train.columns.tolist(),
+            'n_features': len(X_train.columns),
+            'algorithms': [name for name, _ in models]
+        }
+        
+        # Store feature names in model
+        ensemble.feature_names = X_train.columns.tolist()
+        ensemble.metadata = metadata
+        
+        # Save model
+        model_path = get_model_path(model_id)
+        joblib.dump(ensemble, model_path)
+        
+        # Update metadata file
+        all_metadata = load_models_metadata()
+        all_metadata.append(metadata)
+        save_models_metadata(all_metadata)
+        
+        return model_id, metadata
+        
+    except Exception as e:
+        # Try to use streamlit if available, otherwise print
+        try:
+            st.error(f"Training failed: {str(e)}")
+        except:
+            print(f"Training failed: {str(e)}")
+        raise  # Re-raise the exception so caller can handle it
+        return None, None
 
 def train_advanced_ensemble():
     """Simple advanced ensemble training"""
@@ -114,9 +290,17 @@ def train_advanced_ensemble():
 
 # train_advanced_ensemble_silent() function removed - no longer needed since model is pre-trained
 
-def load_model():
-    """Load the properly trained ML model"""
+def load_model(model_id=None):
+    """Load a model by ID or load the default model"""
     try:
+        # If model_id is specified, load that model
+        if model_id:
+            model_path = get_model_path(model_id)
+            if os.path.exists(model_path):
+                return joblib.load(model_path)
+            else:
+                st.warning(f"Model {model_id} not found, loading default model")
+        
         # Load properly trained model (preferred)
         if os.path.exists('properly_trained_model.joblib'):
             try:
@@ -144,11 +328,19 @@ def load_model():
                 st.error(f"Error loading advanced model: {e}")
                 pass
         
-        # Final fallback to basic model
-        from model_builder import get_or_create_model
-        return get_or_create_model()
-    except:
-        st.error("Error loading model. Please ensure model files exist.")
+        # Check for any versioned models
+        metadata = load_models_metadata()
+        if metadata:
+            # Load the most recent model
+            latest_model = metadata[-1]
+            model_path = get_model_path(latest_model['id'])
+            if os.path.exists(model_path):
+                return joblib.load(model_path)
+        
+        st.error("No models found. Please train a model first.")
+        return None
+    except Exception as e:
+        st.error(f"Error loading model: {str(e)}")
         return None
 
 def load_random_example(example_type):
@@ -199,8 +391,12 @@ def load_random_example(example_type):
         return None
 
 def create_prediction_form(model):
-    """Create clean prediction form"""
+    """Create clean prediction form - Updated to support both Pipeline and VotingClassifier models"""
     st.header("Exoplanet Classification Interface")
+    
+    # Check if model is Pipeline or VotingClassifier (FIXED: handles both model types)
+    is_pipeline = hasattr(model, 'named_steps')
+    is_voting = hasattr(model, 'estimators_')
     
     col1, col2 = st.columns([3, 2])
     
@@ -370,8 +566,14 @@ def create_prediction_form(model):
         
         if st.button("Classify Exoplanet", type="primary", use_container_width=True):
             # Get the exact features the model expects
-            preprocess_pipeline = model.named_steps['preprocess']
-            expected_features = preprocess_pipeline.named_steps['imputer'].feature_names_in_
+            if is_pipeline:
+                preprocess_pipeline = model.named_steps['preprocess']
+                expected_features = preprocess_pipeline.named_steps['imputer'].feature_names_in_
+            elif hasattr(model, 'feature_names'):
+                expected_features = model.feature_names
+            else:
+                # Fallback to all relevant features
+                expected_features = get_all_relevant_features()
             
             # Check if we have actual row data (from random example)
             if hasattr(st.session_state, 'actual_row_data') and st.session_state.actual_row_data is not None:
@@ -634,7 +836,12 @@ def display_data_upload():
                         status_text = st.empty()
                         
                         # Map feature names (handle different dataset formats)
-                        feature_names = batch_model.named_steps['preprocess'].transformers_[0][2]
+                        if hasattr(batch_model, 'named_steps'):
+                            feature_names = batch_model.named_steps['preprocess'].transformers_[0][2]
+                        elif hasattr(batch_model, 'feature_names'):
+                            feature_names = batch_model.feature_names
+                        else:
+                            feature_names = get_all_relevant_features()
                         
                         # Feature mapping for different datasets
                         feature_mapping = {}
@@ -1043,6 +1250,327 @@ def display_data_upload():
             except Exception as e:
                 st.error(f"Error loading sample data: {str(e)}")
 
+def display_retraining_page():
+    """Display the model retraining interface"""
+    st.header("🔄 Model Retraining & Management")
+    
+    tab1, tab2, tab3 = st.tabs(["Train New Model", "Model Evaluations", "Model Management"])
+    
+    with tab1:
+        st.subheader("Train a New Model")
+        st.markdown("""
+        Upload a CSV file with exoplanet data to train a new model. The CSV should contain:
+        - A target column with disposition values that map to: CONFIRMED, CANDIDATE, or FALSE POSITIVE
+        - Relevant features for classification
+        """)
+        
+        # Model configuration
+        col1, col2 = st.columns(2)
+        with col1:
+            model_name = st.text_input("Model Name", value=f"Model_{datetime.now().strftime('%Y%m%d_%H%M')}")
+        with col2:
+            test_size = st.slider("Test Set Size (%)", min_value=10, max_value=40, value=20)
+        
+        description = st.text_area("Model Description (optional)", 
+                                   placeholder="Describe this model version...")
+        
+        # File upload
+        uploaded_file = st.file_uploader("Upload Training Data (CSV)", type=['csv'])
+        
+        if uploaded_file is not None:
+            try:
+                # Load data
+                df = pd.read_csv(uploaded_file, comment='#')
+                
+                st.success(f"✓ Loaded {len(df)} samples")
+                
+                # Show data preview
+                with st.expander("Data Preview"):
+                    st.dataframe(df.head(10))
+                    st.write(f"Columns: {len(df.columns)}")
+                    st.write(f"Rows: {len(df)}")
+                
+                # Target column selection
+                st.subheader("Target Column Configuration")
+                
+                # Let user select target column
+                target_column = st.selectbox(
+                    "Select Target Column",
+                    options=df.columns.tolist(),
+                    index=df.columns.tolist().index('koi_disposition') if 'koi_disposition' in df.columns else 0,
+                    help="Select the column that contains the classification labels"
+                )
+                
+                # Show unique values in selected column
+                unique_values = df[target_column].dropna().unique().tolist()
+                st.write(f"**Unique values in '{target_column}':** {', '.join(map(str, unique_values[:10]))}")
+                if len(unique_values) > 10:
+                    st.write(f"... and {len(unique_values) - 10} more")
+                
+                # Value mapping configuration
+                st.markdown("**Map values to classification labels:**")
+                
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.markdown("**🌍 Confirmed Planet**")
+                    confirmed_values = st.multiselect(
+                        "Values for CONFIRMED",
+                        options=unique_values,
+                        default=[v for v in unique_values if 'CONFIRMED' in str(v).upper()],
+                        key="confirmed"
+                    )
+                
+                with col2:
+                    st.markdown("**🔍 Candidate**")
+                    candidate_values = st.multiselect(
+                        "Values for CANDIDATE",
+                        options=unique_values,
+                        default=[v for v in unique_values if 'CANDIDATE' in str(v).upper()],
+                        key="candidate"
+                    )
+                
+                with col3:
+                    st.markdown("**❌ False Positive**")
+                    false_positive_values = st.multiselect(
+                        "Values for FALSE POSITIVE",
+                        options=unique_values,
+                        default=[v for v in unique_values if 'FALSE' in str(v).upper() or 'POSITIVE' in str(v).upper()],
+                        key="false_positive"
+                    )
+                
+                # Create mapping
+                label_map = {}
+                for val in confirmed_values:
+                    label_map[val] = 2
+                for val in candidate_values:
+                    label_map[val] = 1
+                for val in false_positive_values:
+                    label_map[val] = 0
+                
+                # Check for unmapped or duplicate values
+                all_mapped = confirmed_values + candidate_values + false_positive_values
+                unmapped = [v for v in unique_values if v not in all_mapped]
+                
+                if unmapped:
+                    st.warning(f"⚠️ Unmapped values (will be excluded): {', '.join(map(str, unmapped))}")
+                
+                # Check for duplicates
+                if len(all_mapped) != len(set(all_mapped)):
+                    st.error("❌ Some values are mapped to multiple categories. Please fix the mapping.")
+                    return
+                
+                if not label_map:
+                    st.error("❌ Please map at least some values to the three categories.")
+                    return
+                
+                # Map target
+                df['target'] = df[target_column].map(label_map)
+                df = df[df['target'].notna()]
+                
+                st.info(f"📊 Valid samples after filtering: {len(df)}")
+                
+                # Show class distribution
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Confirmed", len(df[df['target'] == 2]))
+                with col2:
+                    st.metric("Candidates", len(df[df['target'] == 1]))
+                with col3:
+                    st.metric("False Positives", len(df[df['target'] == 0]))
+                
+                # Feature selection
+                st.subheader("Feature Selection")
+                
+                # Get relevant features that exist in the dataset
+                all_relevant = get_all_relevant_features()
+                available_features = [f for f in all_relevant if f in df.columns]
+                
+                st.write(f"**Available relevant features:** {len(available_features)}/{len(all_relevant)}")
+                
+                with st.expander("View Selected Features"):
+                    for category, features in RELEVANT_FEATURES.items():
+                        available_in_category = [f for f in features if f in df.columns]
+                        if available_in_category:
+                            st.write(f"**{category.title()}:** {', '.join(available_in_category)}")
+                
+                if len(available_features) < 5:
+                    st.warning("⚠️ Less than 5 relevant features found. Model performance may be limited.")
+                
+                # Train button
+                if st.button("🚀 Train Model", type="primary"):
+                    with st.spinner("Training model... This may take a few minutes."):
+                        try:
+                            # Prepare features
+                            X = df[available_features].copy()
+                            
+                            # Fill NaN values properly
+                            for col in X.columns:
+                                if X[col].isna().any():
+                                    median_val = X[col].median()
+                                    if pd.isna(median_val):
+                                        X[col] = X[col].fillna(0)
+                                    else:
+                                        X[col] = X[col].fillna(median_val)
+                            
+                            # Final check
+                            if X.isna().any().any():
+                                X = X.fillna(0)
+                            
+                            y = df['target']
+                            
+                            # Split data
+                            X_train, X_test, y_train, y_test = train_test_split(
+                                X, y, test_size=test_size/100, random_state=42, stratify=y
+                            )
+                            
+                            st.info(f"Training on {len(X_train)} samples, testing on {len(X_test)} samples")
+                            
+                            # Train model
+                            model_id, metadata = train_new_model(
+                                X_train, y_train, X_test, y_test, 
+                                model_name, description
+                            )
+                            
+                            if model_id:
+                                st.success(f"✅ Model trained successfully! Model ID: {model_id}")
+                                st.balloons()
+                                
+                                # Display results
+                                col1, col2, col3, col4 = st.columns(4)
+                                with col1:
+                                    st.metric("Test Accuracy", f"{metadata['test_accuracy']:.2%}")
+                                with col2:
+                                    st.metric("Precision", f"{metadata['precision']:.2%}")
+                                with col3:
+                                    st.metric("Recall", f"{metadata['recall']:.2%}")
+                                with col4:
+                                    st.metric("F1 Score", f"{metadata['f1_score']:.2%}")
+                                
+                                # Confusion matrix
+                                st.subheader("Confusion Matrix")
+                                cm = np.array(metadata['confusion_matrix'])
+                                fig = px.imshow(cm, 
+                                               labels=dict(x="Predicted", y="Actual", color="Count"),
+                                               x=['False Positive', 'Candidate', 'Confirmed'],
+                                               y=['False Positive', 'Candidate', 'Confirmed'],
+                                               text_auto=True)
+                                st.plotly_chart(fig, use_container_width=True)
+                                
+                        except Exception as e:
+                            st.error(f"Training failed: {str(e)}")
+                            import traceback
+                            st.code(traceback.format_exc())
+                            
+            except Exception as e:
+                st.error(f"Error loading file: {str(e)}")
+    
+    with tab2:
+        st.subheader("Model Evaluations")
+        
+        # Load all models metadata
+        metadata_list = load_models_metadata()
+        
+        if not metadata_list:
+            st.info("No trained models found. Train your first model in the 'Train New Model' tab.")
+        else:
+            st.write(f"**Total Models:** {len(metadata_list)}")
+            
+            # Create comparison dataframe
+            comparison_df = pd.DataFrame([{
+                'Model Name': m['name'],
+                'Model ID': m['id'],
+                'Created': m['created_at'][:10],
+                'Test Accuracy': f"{m['test_accuracy']:.2%}",
+                'Precision': f"{m['precision']:.2%}",
+                'Recall': f"{m['recall']:.2%}",
+                'F1 Score': f"{m['f1_score']:.2%}",
+                'Train Samples': m['train_samples'],
+                'Test Samples': m['test_samples'],
+                'Features': m['n_features']
+            } for m in metadata_list])
+            
+            st.dataframe(comparison_df, use_container_width=True)
+            
+            # Detailed view
+            st.subheader("Detailed Model View")
+            model_names = [f"{m['name']} ({m['id']})" for m in metadata_list]
+            selected_model_idx = st.selectbox("Select Model", range(len(model_names)), 
+                                             format_func=lambda x: model_names[x])
+            
+            if selected_model_idx is not None:
+                selected_metadata = metadata_list[selected_model_idx]
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("### Model Information")
+                    st.write(f"**Name:** {selected_metadata['name']}")
+                    st.write(f"**ID:** {selected_metadata['id']}")
+                    st.write(f"**Created:** {selected_metadata['created_at']}")
+                    st.write(f"**Description:** {selected_metadata.get('description', 'N/A')}")
+                    st.write(f"**Algorithms:** {', '.join(selected_metadata['algorithms'])}")
+                
+                with col2:
+                    st.markdown("### Performance Metrics")
+                    st.metric("Test Accuracy", f"{selected_metadata['test_accuracy']:.2%}")
+                    st.metric("Precision", f"{selected_metadata['precision']:.2%}")
+                    st.metric("Recall", f"{selected_metadata['recall']:.2%}")
+                    st.metric("F1 Score", f"{selected_metadata['f1_score']:.2%}")
+                
+                # Confusion Matrix
+                st.markdown("### Confusion Matrix")
+                cm = np.array(selected_metadata['confusion_matrix'])
+                fig = px.imshow(cm,
+                               labels=dict(x="Predicted", y="Actual", color="Count"),
+                               x=['False Positive', 'Candidate', 'Confirmed'],
+                               y=['False Positive', 'Candidate', 'Confirmed'],
+                               text_auto=True,
+                               color_continuous_scale='Blues')
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Features used
+                with st.expander("Features Used"):
+                    st.write(f"Total: {selected_metadata['n_features']} features")
+                    st.write(", ".join(selected_metadata['features']))
+    
+    with tab3:
+        st.subheader("Model Management")
+        
+        metadata_list = load_models_metadata()
+        
+        if not metadata_list:
+            st.info("No models to manage.")
+        else:
+            st.write(f"**Total Models:** {len(metadata_list)}")
+            
+            # Model list with delete option
+            for idx, m in enumerate(metadata_list):
+                with st.expander(f"📦 {m['name']} - {m['id']}"):
+                    col1, col2, col3 = st.columns([2, 2, 1])
+                    
+                    with col1:
+                        st.write(f"**Created:** {m['created_at'][:19]}")
+                        st.write(f"**Accuracy:** {m['test_accuracy']:.2%}")
+                    
+                    with col2:
+                        st.write(f"**Samples:** {m['train_samples']} train, {m['test_samples']} test")
+                        st.write(f"**Features:** {m['n_features']}")
+                    
+                    with col3:
+                        if st.button("🗑️ Delete", key=f"delete_{m['id']}"):
+                            # Delete model file
+                            model_path = get_model_path(m['id'])
+                            if os.path.exists(model_path):
+                                os.remove(model_path)
+                            
+                            # Update metadata
+                            metadata_list.pop(idx)
+                            save_models_metadata(metadata_list)
+                            
+                            st.success(f"Deleted model {m['id']}")
+                            st.rerun()
+
 def display_model_info(model):
     """Display model information"""
     st.header("Model Information")
@@ -1053,10 +1581,15 @@ def display_model_info(model):
         st.markdown('<div class="info-card">', unsafe_allow_html=True)
         st.subheader("Algorithm")
         try:
-            algo_name = model.named_steps['model'].__class__.__name__
+            if hasattr(model, 'named_steps'):
+                algo_name = model.named_steps['model'].__class__.__name__
+            elif hasattr(model, 'estimators_'):
+                algo_name = "VotingClassifier"
+            else:
+                algo_name = model.__class__.__name__
             st.write(algo_name)
         except:
-            st.write("Random Forest")
+            st.write("Ensemble Model")
         st.markdown('</div>', unsafe_allow_html=True)
     
     with col2:
@@ -1076,11 +1609,22 @@ def display_model_info(model):
     
     # Feature importance if available
     try:
-        if hasattr(model.named_steps['model'], 'feature_importances_'):
+        # Get the actual classifier
+        if hasattr(model, 'named_steps'):
+            classifier = model.named_steps['model']
+            feature_names = model.named_steps['preprocess'].transformers_[0][2]
+        elif hasattr(model, 'estimators_'):
+            # For VotingClassifier, try to get from first estimator
+            classifier = model.estimators_[0][1] if hasattr(model.estimators_[0], '__getitem__') else model.estimators_[0]
+            feature_names = model.feature_names if hasattr(model, 'feature_names') else get_all_relevant_features()
+        else:
+            classifier = model
+            feature_names = model.feature_names if hasattr(model, 'feature_names') else get_all_relevant_features()
+        
+        if hasattr(classifier, 'feature_importances_'):
             st.subheader("Feature Importance")
             
-            feature_names = model.named_steps['preprocess'].transformers_[0][2]
-            importances = model.named_steps['model'].feature_importances_
+            importances = classifier.feature_importances_
             
             # Create importance DataFrame
             importance_df = pd.DataFrame({
@@ -1107,26 +1651,74 @@ def main():
     
     page = st.sidebar.selectbox("Navigation", [
         "Classification",
+        "Model Retraining",
         "Data Upload",
         "Model Information",
         "Documentation"
     ])
     
-    # Load model
-    with st.spinner("Loading classification model..."):
-        model = load_model()
-    
-    if model is None:
-        st.error("Failed to load model. Please check your model files.")
-        return
+    # Model selection in sidebar (for Classification page)
+    if page == "Classification":
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("Model Selection")
+        
+        # Get available models
+        metadata_list = load_models_metadata()
+        
+        # Add default models if they exist
+        default_models = []
+        if os.path.exists('properly_trained_model.joblib'):
+            default_models.append(('Default Model (Properly Trained)', None))
+        elif os.path.exists('advanced_ensemble.joblib'):
+            default_models.append(('Default Model (Advanced Ensemble)', None))
+        
+        # Add versioned models
+        versioned_models = [(f"{m['name']} ({m['test_accuracy']:.1%})", m['id']) for m in metadata_list]
+        
+        all_models = default_models + versioned_models
+        
+        if all_models:
+            model_names = [name for name, _ in all_models]
+            selected_idx = st.sidebar.selectbox(
+                "Select Model",
+                range(len(model_names)),
+                format_func=lambda x: model_names[x]
+            )
+            selected_model_id = all_models[selected_idx][1]
+        else:
+            st.sidebar.warning("No models available. Please train a model first.")
+            selected_model_id = None
+        
+        # Load selected model
+        with st.spinner("Loading classification model..."):
+            model = load_model(selected_model_id)
+        
+        if model is None:
+            st.error("Failed to load model. Please train a model in the 'Model Retraining' page.")
+            return
+        
+        # Show model info in sidebar
+        if hasattr(model, 'metadata'):
+            st.sidebar.markdown("---")
+            st.sidebar.markdown("**Model Info:**")
+            st.sidebar.write(f"Accuracy: {model.metadata['test_accuracy']:.2%}")
+            st.sidebar.write(f"Features: {model.metadata['n_features']}")
     
     # Route to appropriate page
     if page == "Classification":
         create_prediction_form(model)
+    elif page == "Model Retraining":
+        display_retraining_page()
     elif page == "Data Upload":
         display_data_upload()
     elif page == "Model Information":
-        display_model_info(model)
+        # Load model for info page
+        with st.spinner("Loading model..."):
+            model = load_model()
+        if model:
+            display_model_info(model)
+        else:
+            st.error("No model available.")
     elif page == "Documentation":
         st.header("Documentation")
         
