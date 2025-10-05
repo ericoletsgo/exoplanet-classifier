@@ -12,17 +12,18 @@ npm install
 cd ..
 ```
 
-### 2. Train the Model (First Time Only)
+### 2. Start the Application
+**Terminal 1 (API Server):**
 ```bash
-python fast_proper_training.py
+.\start_api.bat
 ```
 
-### 3. Start the Application
+**Terminal 2 (React Frontend):**
 ```bash
-.\start.ps1
+.\start_frontend.bat
 ```
 
-Then open **http://localhost:5173** in your browser.
+Then open **http://localhost:5173** (or the port shown in terminal) in your browser.
 
 ---
 
@@ -44,14 +45,11 @@ exoplanet-classifier/
 ├── frontend/                     # React frontend
 │   └── src/                      # Source code
 ├── data/                         # NASA datasets (KOI, K2, TOI)
-├── models/                       # Saved model versions
-├── scripts/                      # Utility scripts
-├── docs/                         # Documentation
+├── models/                       # Saved model versions & metadata
 ├── properly_trained_model.joblib # Main trained model
-├── fast_proper_training.py       # Training script
-├── enhanced_exoplanet_classifier.py  # Streamlit app
 ├── requirements.txt              # Python dependencies
-└── start.ps1                     # Startup script
+├── start_api.bat                 # API server startup
+└── start_frontend.bat            # Frontend startup
 ```
 
 ---
@@ -78,33 +76,27 @@ The model uses 19 key features across 4 categories:
 
 ---
 
-## API Endpoints
+## Features
 
+### React Frontend Pages
+- **Home** - Dashboard with model info and feature overview
+- **Predict** - Individual exoplanet classification with random examples
+- **Batch Upload** - CSV file processing for multiple candidates
+- **Model Retraining** - Train new models and manage existing ones
+- **Metrics** - Model performance analysis and feature importance
+- **Datasets** - Browse KOI, K2, and TOI datasets
+
+### API Endpoints
 - `GET /` - Health check
-- `GET /features` - List all features
+- `GET /features` - List all features with descriptions
 - `POST /predict` - Make predictions
+- `POST /predict-raw` - Predict using raw dataset rows
 - `GET /metrics` - Model performance metrics
-- `GET /datasets/{name}` - Browse datasets
+- `GET /datasets/{name}` - Browse datasets with pagination
+- `GET /random-example/{dataset}` - Get random examples for testing
+- `GET /models` - List all trained models
 
 API docs: **http://localhost:8000/docs**
-
----
-
-## Alternative: Streamlit Interface
-
-```bash
-streamlit run enhanced_exoplanet_classifier.py
-```
-
----
-
-## Documentation
-
-See the `docs/` folder for detailed guides:
-- **QUICKSTART.md** - Quick setup guide
-- **FRONTEND_SETUP.md** - Frontend configuration
-- **RETRAINING_GUIDE.md** - Model training instructions
-- **APPLICATION_GUIDE.md** - Full application guide
 
 ---
 

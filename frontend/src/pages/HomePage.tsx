@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Target, BarChart3, Database, TrendingUp, Upload } from 'lucide-react'
+import { Target, BarChart3, Database, TrendingUp, Upload, Brain } from 'lucide-react'
 import { api } from '../lib/api'
 
 export default function HomePage() {
@@ -42,11 +42,18 @@ export default function HomePage() {
       color: 'text-green-400',
     },
     {
+      icon: Brain,
+      title: 'Model Retraining',
+      description: 'Train new models and manage existing ones',
+      link: '/retrain',
+      color: 'text-purple-400',
+    },
+    {
       icon: Database,
       title: 'Browse Datasets',
       description: 'Explore KOI, K2, and TOI exoplanet datasets',
       link: '/datasets',
-      color: 'text-purple-400',
+      color: 'text-indigo-400',
     },
   ]
 
@@ -62,7 +69,7 @@ export default function HomePage() {
       </div>
 
       {/* Feature Cards */}
-      <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid md:grid-cols-2 lg:grid-cols-5 gap-6">
         {features.map((feature) => {
           const Icon = feature.icon
           return (

@@ -1,7 +1,18 @@
 import { useState, useEffect } from 'react'
-import { Target, Loader2, AlertCircle } from 'lucide-react'
+import { Target, Loader2, AlertCircle, Dice1, Dice2, Dice3, CheckCircle, XCircle } from 'lucide-react'
 import { api, type PredictionResponse, type FeaturesResponse } from '../lib/api'
 import { formatPercentage, getDispositionColor, getConfidenceColor } from '../lib/utils'
+
+interface RandomExampleData {
+  features: Record<string, number>
+  metadata: {
+    row_index: number
+    koi_name: string
+    expected_disposition: string
+    dataset: string
+  }
+  raw_row: Record<string, any>
+}
 
 export default function PredictPage() {
   const [features, setFeatures] = useState<FeaturesResponse | null>(null)
@@ -10,9 +21,12 @@ export default function PredictPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [activeCategory, setActiveCategory] = useState<string>('signal_quality')
+  const [randomExampleData, setRandomExampleData] = useState<RandomExampleData | null>(null)
+  const [modelInfo, setModelInfo] = useState<any>(null)
 
   useEffect(() => {
     loadFeatures()
+    loadModelInfo()
   }, [])
 
   const loadFeatures = async () => {
@@ -31,6 +45,15 @@ export default function PredictPage() {
     }
   }
 
+  const loadModelInfo = async () => {
+    try {
+      const metrics = await api.getMetrics()
+      setModelInfo(metrics.model_info)
+    } catch (err) {
+      console.error('Failed to load model info:', err)
+    }
+  }
+
   const handleInputChange = (feature: string, value: string) => {
     setFormData(prev => ({
       ...prev,
@@ -44,7 +67,16 @@ export default function PredictPage() {
     setPrediction(null)
 
     try {
-      const result = await api.predict({ features: formData })
+      let result
+      
+      // If we have random example data, use raw prediction for accuracy
+      if (randomExampleData) {
+        result = await api.predictRaw(randomExampleData.raw_row)
+      } else {
+        // For manual input, use regular prediction
+        result = await api.predict({ features: formData })
+      }
+      
       setPrediction(result)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Prediction failed')
@@ -53,26 +85,15 @@ export default function PredictPage() {
     }
   }
 
-  const handleLoadExample = async () => {
+  const handleLoadRandomExample = async (disposition?: string) => {
     try {
-      // Load a random example from the dataset
-      const randomPage = Math.floor(Math.random() * 100) + 1 // Random page between 1-100
-      const dataset = await api.getDataset('koi', randomPage, 1)
-      if (dataset.data.length > 0) {
-        const example = dataset.data[0]
-        const newFormData: Record<string, number> = {}
-        
-        Object.keys(formData).forEach(feature => {
-          newFormData[feature] = example[feature] !== null && example[feature] !== undefined 
-            ? parseFloat(example[feature]) 
-            : 0
-        })
-        
-        setFormData(newFormData)
-        setPrediction(null) // Clear previous prediction
-      }
+      const exampleData = await api.getRandomExample('koi', disposition)
+      setRandomExampleData(exampleData)
+      setFormData(exampleData.features)
+      setPrediction(null) // Clear previous prediction
+      setError(null)
     } catch (err) {
-      setError('Failed to load example')
+      setError('Failed to load random example')
     }
   }
 
@@ -85,6 +106,7 @@ export default function PredictPage() {
       setFormData(resetData)
       setPrediction(null)
       setError(null)
+      setRandomExampleData(null)
     }
   }
 
@@ -109,14 +131,88 @@ export default function PredictPage() {
           </p>
         </div>
         <div className="flex gap-3">
-          <button onClick={handleLoadExample} className="btn-secondary">
-            Load Example
-          </button>
           <button onClick={handleReset} className="btn-secondary">
             Reset
           </button>
         </div>
       </div>
+
+      {/* Model Information */}
+      {modelInfo && (
+        <div className="card bg-primary-900/20 border-primary-700">
+          <div className="flex items-center gap-2 mb-2">
+            <CheckCircle className="w-5 h-5 text-primary-500" />
+            <h3 className="text-lg font-semibold">Model Information</h3>
+          </div>
+          <div className="grid md:grid-cols-3 gap-4 text-sm">
+            <div>
+              <p className="text-slate-400">Model Type</p>
+              <p className="font-semibold">{modelInfo.model_type}</p>
+            </div>
+            <div>
+              <p className="text-slate-400">Features</p>
+              <p className="font-semibold">{modelInfo.n_features}</p>
+            </div>
+            <div>
+              <p className="text-slate-400">Training Samples</p>
+              <p className="font-semibold">{modelInfo.n_samples?.toLocaleString()}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Random Example Buttons */}
+      <div className="card">
+        <h3 className="text-lg font-semibold mb-4">Load Random Examples</h3>
+        <div className="grid md:grid-cols-3 gap-3">
+          <button
+            onClick={() => handleLoadRandomExample('CONFIRMED')}
+            className="btn-secondary flex items-center justify-center gap-2"
+          >
+            <Dice1 className="w-4 h-4" />
+            Random Confirmed Planet
+          </button>
+          <button
+            onClick={() => handleLoadRandomExample('CANDIDATE')}
+            className="btn-secondary flex items-center justify-center gap-2"
+          >
+            <Dice2 className="w-4 h-4" />
+            Random Candidate
+          </button>
+          <button
+            onClick={() => handleLoadRandomExample('FALSE POSITIVE')}
+            className="btn-secondary flex items-center justify-center gap-2"
+          >
+            <Dice3 className="w-4 h-4" />
+            Random False Positive
+          </button>
+        </div>
+      </div>
+
+      {/* Random Example Information */}
+      {randomExampleData && (
+        <div className="card bg-slate-800/50 border-slate-600">
+          <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
+            <CheckCircle className="w-5 h-5 text-green-400" />
+            Random Example Loaded
+          </h3>
+          <div className="grid md:grid-cols-2 gap-4">
+            <div>
+              <p className="text-sm text-slate-400">Data Source</p>
+              <p className="font-semibold">
+                Row {randomExampleData.metadata.row_index} from {randomExampleData.metadata.dataset}.csv
+              </p>
+              <p className="text-sm text-slate-500">KOI: {randomExampleData.metadata.koi_name}</p>
+            </div>
+            <div>
+              <p className="text-sm text-slate-400">Expected Result (NASA)</p>
+              <div className={`inline-block px-3 py-1 rounded-lg border ${getDispositionColor(randomExampleData.metadata.expected_disposition)}`}>
+                <p className="font-semibold">{randomExampleData.metadata.expected_disposition}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {error && (
         <div className="card bg-red-900/20 border-red-700">
@@ -165,6 +261,44 @@ export default function PredictPage() {
               ))}
             </div>
           </div>
+
+          {/* Prediction vs Expected Comparison */}
+          {randomExampleData && (
+            <div className="mt-6 pt-6 border-t border-slate-600">
+              <h4 className="text-lg font-semibold mb-4">📊 Prediction vs Expected</h4>
+              <div className="grid md:grid-cols-2 gap-4">
+                <div>
+                  <p className="text-sm text-slate-400 mb-2">Expected (NASA):</p>
+                  <div className={`inline-block px-3 py-2 rounded-lg border ${getDispositionColor(randomExampleData.metadata.expected_disposition)}`}>
+                    <p className="font-semibold">{randomExampleData.metadata.expected_disposition}</p>
+                  </div>
+                </div>
+                <div>
+                  <p className="text-sm text-slate-400 mb-2">Model Prediction:</p>
+                  <div className={`inline-block px-3 py-2 rounded-lg border ${getDispositionColor(prediction.prediction)}`}>
+                    <p className="font-semibold">{prediction.prediction}</p>
+                  </div>
+                </div>
+              </div>
+              
+              {/* Match/Mismatch Result */}
+              <div className="mt-4">
+                {prediction.prediction === randomExampleData.metadata.expected_disposition ? (
+                  <div className="flex items-center gap-2 text-green-400">
+                    <CheckCircle className="w-5 h-5" />
+                    <span className="font-semibold">🎉 CORRECT! Model prediction matches NASA's classification!</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 text-red-400">
+                    <XCircle className="w-5 h-5" />
+                    <span className="font-semibold">
+                      ❌ MISMATCH! Expected {randomExampleData.metadata.expected_disposition}, but model predicted {prediction.prediction}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
