@@ -24,7 +24,14 @@ app = FastAPI(
 # CORS middleware to allow frontend requests
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],  # Vite default port
+    allow_origins=[
+        "http://localhost:5173", 
+        "http://localhost:3000",
+        "https://*.vercel.app",  # Allow all Vercel deployments
+        "https://*.onrender.com",  # Allow all Render deployments
+        "https://*.railway.app",  # Allow all Railway deployments
+        "*"  # Allow all origins for production (you can restrict this later)
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
