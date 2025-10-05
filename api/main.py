@@ -38,6 +38,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Explicit OPTIONS handler for CORS preflight requests
+@app.options("/{full_path:path}")
+async def options_handler(full_path: str):
+    """Handle CORS preflight requests"""
+    return {"message": "OK"}
+
 # Constants
 # Get the parent directory (project root) to find model files
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
