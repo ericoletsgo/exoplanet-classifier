@@ -12,7 +12,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 from sklearn.feature_selection import SelectKBest, mutual_info_classif
-from sklearn.model_selection import cross_val_score, StratifiedKFold
+from sklearn.model_selection import cross_val_score, StratifiedKFold, train_test_split
 from sklearn.metrics import classification_report
 import warnings
 warnings.filterwarnings('ignore')
@@ -24,7 +24,7 @@ def load_and_clean_data():
     print("=" * 60)
     
     print("Loading KOI dataset...")
-    df = pd.read_csv("koi.csv", comment='#')
+    df = pd.read_csv("data/koi.csv", comment='#')
     print(f"[OK] Data loaded: {len(df)} rows, {len(df.columns)} columns")
     
     # Clean target
@@ -199,25 +199,51 @@ def main():
         # Load and clean data
         X, y, feature_names = load_and_clean_data()
         
-        # Create fast ensemble
-        optimized_model = create_fast_ensemble(X, y, feature_names)
+        # PROPER TRAIN/TEST SPLIT - Prevent evaluation data leakage
+        print("\n" + "=" * 60)
+        print("Creating Train/Test Split (80/20)")
+        print("=" * 60)
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42, stratify=y
+        )
+        print(f"[OK] Training set: {len(X_train)} samples")
+        print(f"[OK] Test set: {len(X_test)} samples (held out for evaluation)")
         
-        # Evaluate model
-        evaluate_model(optimized_model, X, y)
+        # Create fast ensemble - TRAIN ONLY ON TRAINING DATA
+        optimized_model = create_fast_ensemble(X_train, y_train, feature_names)
         
-        # Save model
-        print(f"\nSaving model...")
+        # Evaluate model ON TEST SET ONLY
+        print("\n" + "=" * 60)
+        print("STEP 3: Model Evaluation on HELD-OUT Test Set")
+        print("=" * 60)
+        print("Generating predictions on unseen test data...")
+        y_pred = optimized_model.predict(X_test)
+        
+        print("\nClassification Report (Test Set):")
+        print(classification_report(y_test, y_pred, 
+                                  target_names=['False Positive', 'Candidate', 'Confirmed Planet']))
+        
+        # Calculate test accuracy
+        from sklearn.metrics import accuracy_score
+        test_accuracy = accuracy_score(y_test, y_pred)
+        optimized_model.test_accuracy = test_accuracy
+        
+        # Save model AND test set
+        print(f"\nSaving model and test set...")
         joblib.dump(optimized_model, 'properly_trained_model.joblib')
+        joblib.dump({'X_test': X_test, 'y_test': y_test}, 'data/test_set.joblib')
         
         print(f"\n" + "=" * 60)
         print("TRAINING COMPLETE!")
         print("=" * 60)
-        print(f"Final Model Performance: {optimized_model.cv_accuracy:.3f} +/- {optimized_model.cv_std:.3f}")
+        print(f"Cross-Validation Accuracy (Training): {optimized_model.cv_accuracy:.3f} +/- {optimized_model.cv_std:.3f}")
+        print(f"Test Set Accuracy (Unseen Data): {test_accuracy:.3f}")
         print(f"Features Used: {optimized_model.n_features_selected}/{len(feature_names)}")
         print(f"Models in Ensemble: {optimized_model.models_used}")
         print(f"Data Leakage Removed: {optimized_model.dataset_summary['removed_data_leakage']}")
         print(f"\nModel saved to 'properly_trained_model.joblib'")
-        print("This model actually LEARNS from orbital physics!")
+        print(f"Test set saved to 'data/test_set.joblib'")
+        print("\nWARNING: The test accuracy is the TRUE performance on unseen data!")
         
     except Exception as e:
         print(f"[ERROR] {str(e)}")
