@@ -33,7 +33,7 @@ app.add_middleware(
 # Constants
 # Get the parent directory (project root) to find model files
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODEL_PATH = os.path.join(BASE_DIR, "properly_trained_model.joblib")
+MODEL_PATH = os.path.join(BASE_DIR, "balanced_model_20251005_115605.joblib")
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 MODELS_METADATA_FILE = os.path.join(BASE_DIR, "models", "models_metadata.json")
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -158,6 +158,12 @@ class PredictionResponse(BaseModel):
     probabilities: Dict[str, float]
     prediction_class: int
 
+class BatchPredictionRequest(BaseModel):
+    records: List[Dict[str, float]] = Field(..., description="List of records for batch prediction")
+
+class BatchPredictionResponse(BaseModel):
+    predictions: List[PredictionResponse]
+
 class MetricsResponse(BaseModel):
     accuracy: float
     precision: float
@@ -188,18 +194,29 @@ class DatasetResponse(BaseModel):
     total_pages: int
 
 # Global model cache
-_model_cache = None
+model = None
 
-def load_model():
-    """Load the trained model"""
-    global _model_cache
-    if _model_cache is None:
-        if not os.path.exists(MODEL_PATH):
-            raise HTTPException(status_code=404, detail=f"Model file not found: {MODEL_PATH}")
-        print(f"[INFO] Loading model from {MODEL_PATH}")
-        _model_cache = joblib.load(MODEL_PATH)
-        print(f"[INFO] Model loaded: {type(_model_cache).__name__}")
-    return _model_cache
+@app.on_event("startup")
+def load_model_on_startup():
+    """Load the trained model at application startup"""
+    global model
+    if not os.path.exists(MODEL_PATH):
+        print(f"[ERROR] Model file not found at {MODEL_PATH}")
+        model = None
+        return
+    
+    print(f"[INFO] Loading model from {MODEL_PATH}")
+    model = joblib.load(MODEL_PATH)
+    print(f"[INFO] Model loaded: {type(model).__name__}")
+
+def get_model():
+    """Get the loaded model, raising an error if it's not available"""
+    if model is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Model is not loaded. Check server logs for errors."
+        )
+    return model
 
 def get_feature_names(model):
     """Extract feature names from model"""
@@ -237,22 +254,18 @@ async def get_features():
 async def predict(request: PredictionRequest):
     """Make a prediction using the trained model"""
     try:
-        model = load_model()
+        model = get_model()
         feature_names = get_feature_names(model)
         
         # Create feature vector in correct order
         feature_vector = []
-        missing_features = []
         
         for feature in feature_names:
-            if feature in request.features:
-                feature_vector.append(request.features[feature])
-            else:
-                feature_vector.append(0.0)  # Default to 0 for missing features
-                missing_features.append(feature)
+            feature_vector.append(request.features.get(feature, 0.0))
         
         # Make prediction
-        X = np.array([feature_vector])
+        import pandas as pd
+        X = pd.DataFrame([feature_vector], columns=feature_names)
         prediction = model.predict(X)[0]
         probabilities = model.predict_proba(X)[0]
         
@@ -277,11 +290,59 @@ async def predict(request: PredictionRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
 
+@app.post("/batch-predict", response_model=BatchPredictionResponse)
+async def batch_predict(request: BatchPredictionRequest):
+    """Make predictions for a batch of records - MUCH faster than individual predictions"""
+    try:
+        model = get_model()
+        feature_names = get_feature_names(model)
+
+        # Create feature matrix for the entire batch
+        feature_matrix = []
+        for record in request.records:
+            feature_vector = [record.get(feature, 0.0) for feature in feature_names]
+            feature_matrix.append(feature_vector)
+
+        if not feature_matrix:
+            return BatchPredictionResponse(predictions=[])
+
+        # Make predictions in a single batch (vectorized operation)
+        # Create DataFrame with proper feature names to avoid sklearn warnings
+        import pandas as pd
+        X = pd.DataFrame(feature_matrix, columns=feature_names)
+        predictions = model.predict(X)
+        probabilities = model.predict_proba(X)
+
+        # Map predictions to labels
+        label_map = {0: "FALSE POSITIVE", 1: "CANDIDATE", 2: "CONFIRMED"}
+        results = []
+        for i in range(len(predictions)):
+            pred_class = int(predictions[i])
+            pred_label = label_map.get(pred_class, "UNKNOWN")
+            probs = probabilities[i]
+            prob_dict = {
+                "FALSE POSITIVE": float(probs[0]),
+                "CANDIDATE": float(probs[1]),
+                "CONFIRMED": float(probs[2])
+            }
+            
+            results.append(PredictionResponse(
+                prediction=pred_label,
+                confidence=float(max(probs)),
+                probabilities=prob_dict,
+                prediction_class=pred_class
+            ))
+
+        return BatchPredictionResponse(predictions=results)
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Batch prediction failed: {str(e)}")
+
 @app.post("/predict-raw", response_model=PredictionResponse)
 async def predict_raw(request: dict):
     """Make a prediction using raw dataset row data"""
     try:
-        model = load_model()
+        model = get_model()
         feature_names = get_feature_names(model)
         
         # Extract features from raw row data
@@ -322,7 +383,7 @@ async def predict_raw(request: dict):
 async def get_metrics():
     """Get model performance metrics on held-out test set"""
     try:
-        model = load_model()
+        model = get_model()
         
         # Get feature names from model
         feature_names = get_feature_names(model)
