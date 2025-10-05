@@ -18,24 +18,19 @@ from sklearn.preprocessing import label_binarize
 app = FastAPI(
     title="Exoplanet Classifier API",
     description="REST API for exoplanet classification using machine learning",
-    version="1.0.0"
+    version="1.0.1"  # Bumped to force new deployment
 )
 
 # CORS middleware to allow frontend requests
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173", 
-        "http://localhost:3000",
-        "https://*.vercel.app",  # Allow all Vercel deployments
-        "https://*.onrender.com",  # Allow all Render deployments
-        "https://*.railway.app",  # Allow all Railway deployments
-        "*"  # Allow all origins for production (you can restrict this later)
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["*"],  # Allow all origins
+    allow_credentials=False,  # Must be False when allow_origins=["*"]
+    allow_methods=["*"],  # Allow all methods
+    allow_headers=["*"],  # Allow all headers
 )
+
+# CORS middleware handles OPTIONS requests automatically
 
 # Constants
 # Get the parent directory (project root) to find model files
@@ -248,6 +243,7 @@ async def root():
         "endpoints": ["/predict", "/metrics", "/train", "/datasets", "/features"]
     }
 
+@app.options("/features")
 @app.get("/features")
 async def get_features():
     """Get list of all features required for prediction with human-readable labels"""
@@ -259,6 +255,7 @@ async def get_features():
         "categories": list(RELEVANT_FEATURES.keys())
     }
 
+@app.options("/predict")
 @app.post("/predict", response_model=PredictionResponse)
 async def predict(request: PredictionRequest):
     """Make a prediction using the trained model"""
@@ -303,6 +300,7 @@ async def predict(request: PredictionRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
 
+@app.options("/predict-raw")
 @app.post("/predict-raw", response_model=PredictionResponse)
 async def predict_raw(request: dict):
     """Make a prediction using raw dataset row data"""
@@ -344,6 +342,7 @@ async def predict_raw(request: dict):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Raw prediction failed: {str(e)}")
 
+@app.options("/metrics")
 @app.get("/metrics", response_model=MetricsResponse)
 async def get_metrics():
     """Get model performance metrics on held-out test set"""
@@ -452,6 +451,7 @@ async def get_metrics():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get metrics: {str(e)}")
 
+@app.options("/train")
 @app.post("/train", response_model=TrainingResponse)
 async def train_model(request: TrainingRequest, background_tasks: BackgroundTasks):
     """Trigger model training (runs in background)"""
@@ -468,6 +468,7 @@ async def train_model(request: TrainingRequest, background_tasks: BackgroundTask
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Training failed: {str(e)}")
 
+@app.options("/datasets/{dataset_name}")
 @app.get("/datasets/{dataset_name}", response_model=DatasetResponse)
 async def get_dataset(
     dataset_name: str,
@@ -516,6 +517,7 @@ async def get_dataset(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load dataset: {str(e)}")
 
+@app.options("/random-example/{dataset_name}")
 @app.get("/random-example/{dataset_name}")
 async def get_random_example(dataset_name: str, disposition: Optional[str] = None):
     """Get a random example from the dataset for testing predictions"""
@@ -570,6 +572,7 @@ async def get_random_example(dataset_name: str, disposition: Optional[str] = Non
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get random example: {str(e)}")
 
+@app.options("/models")
 @app.get("/models")
 async def list_models():
     """List all available trained models"""
@@ -593,16 +596,39 @@ import os
 if os.path.exists("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
     
-    # Serve React app for all non-API routes
+    # Serve React app for frontend routes only
     from fastapi.responses import FileResponse
     
+    # Serve React app for non-conflicting frontend routes
+    @app.get("/batch")
+    async def serve_batch_page():
+        if os.path.exists("static/index.html"):
+            return FileResponse("static/index.html")
+        else:
+            raise HTTPException(status_code=404, detail="Frontend not built")
+    
+    @app.get("/retrain")
+    async def serve_retrain_page():
+        if os.path.exists("static/index.html"):
+            return FileResponse("static/index.html")
+        else:
+            raise HTTPException(status_code=404, detail="Frontend not built")
+    
+    # Catch-all for other frontend routes (React Router will handle routing)
     @app.get("/{full_path:path}")
     async def serve_react_app(full_path: str):
-        # Don't serve React for API routes
-        if full_path.startswith("api/") or full_path.startswith("docs") or full_path.startswith("redoc"):
+        # Don't serve React for API routes or system routes
+        if (full_path.startswith("api/") or 
+            full_path.startswith("docs") or 
+            full_path.startswith("redoc") or
+            full_path.startswith("static/") or
+            full_path == "openapi.json" or
+            full_path in ["features", "metrics", "predict", "train", "datasets", "models", "random-example"] or
+            full_path.startswith("datasets/") or
+            full_path.startswith("random-example/")):
             raise HTTPException(status_code=404, detail="Not found")
         
-        # Serve index.html for all other routes (React Router)
+        # Serve React app for all other routes
         if os.path.exists("static/index.html"):
             return FileResponse("static/index.html")
         else:
