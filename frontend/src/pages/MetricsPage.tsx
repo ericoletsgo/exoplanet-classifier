@@ -384,9 +384,9 @@ export default function MetricsPage() {
                   <div className="min-w-[800px]">
                     <HeatmapGrid
                       data={correlations.matrix}
-                      xLabels={correlations.features.map(f => f.replace('koi_', '').replace('_', ' '))}
-                      yLabels={correlations.features.map(f => f.replace('koi_', '').replace('_', ' '))}
-                      cellStyle={(background, value, min, max, data, x, y) => ({
+                      xLabels={correlations.features.map((f: string) => f.replace('koi_', '').replace('_', ' '))}
+                      yLabels={correlations.features.map((f: string) => f.replace('koi_', '').replace('_', ' '))}
+                      cellStyle={(_, value) => ({
                         background: `rgba(59, 130, 246, ${Math.abs(value)})`,
                         fontSize: '10px',
                         color: '#fff',
