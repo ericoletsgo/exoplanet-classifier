@@ -22,7 +22,7 @@ export default function PredictPage() {
   const [error, setError] = useState<string | null>(null)
   const [activeCategory, setActiveCategory] = useState<string>('signal_quality')
   const [randomExampleData, setRandomExampleData] = useState<RandomExampleData | null>(null)
-  const [modelInfo, setModelInfo] = useState<any>(null)
+  // const [modelInfo, setModelInfo] = useState<any>(null) // Not used to prevent slow loading
 
   useEffect(() => {
     loadFeatures()
@@ -144,29 +144,7 @@ export default function PredictPage() {
         </div>
       </div>
 
-      {/* Model Information */}
-      {modelInfo && (
-        <div className="card bg-primary-900/20 border-primary-700">
-          <div className="flex items-center gap-2 mb-2">
-            <CheckCircle className="w-5 h-5 text-primary-500" />
-            <h3 className="text-lg font-semibold">Model Information</h3>
-          </div>
-          <div className="grid md:grid-cols-3 gap-4 text-sm">
-            <div>
-              <p className="text-slate-400">Model Type</p>
-              <p className="font-semibold">{modelInfo.model_type}</p>
-            </div>
-            <div>
-              <p className="text-slate-400">Features</p>
-              <p className="font-semibold">{modelInfo.n_features}</p>
-            </div>
-            <div>
-              <p className="text-slate-400">Training Samples</p>
-              <p className="font-semibold">{modelInfo.n_samples?.toLocaleString()}</p>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Model Information - Removed to prevent slow loading */}
 
       {/* Random Example Buttons */}
       <div className="card">
