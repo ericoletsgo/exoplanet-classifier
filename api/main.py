@@ -240,10 +240,10 @@ async def root():
         "service": "Exoplanet Classifier API",
         "version": "1.0.0",
         "model_status": model_status,
-        "endpoints": ["/api/predict", "/api/metrics", "/api/train", "/api/datasets", "/api/features"]
+        "endpoints": ["/predict", "/metrics", "/train", "/datasets", "/features"]
     }
 
-@app.get("/api/features")
+@app.get("/features")
 async def get_features():
     """Get list of all features required for prediction with human-readable labels"""
     return {
@@ -254,7 +254,7 @@ async def get_features():
         "categories": list(RELEVANT_FEATURES.keys())
     }
 
-@app.post("/api/predict", response_model=PredictionResponse)
+@app.post("/predict", response_model=PredictionResponse)
 async def predict(request: PredictionRequest):
     """Make a prediction using the trained model"""
     try:
@@ -298,7 +298,7 @@ async def predict(request: PredictionRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
 
-@app.post("/api/predict-raw", response_model=PredictionResponse)
+@app.post("/predict-raw", response_model=PredictionResponse)
 async def predict_raw(request: dict):
     """Make a prediction using raw dataset row data"""
     try:
@@ -339,7 +339,7 @@ async def predict_raw(request: dict):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Raw prediction failed: {str(e)}")
 
-@app.get("/api/metrics", response_model=MetricsResponse)
+@app.get("/metrics", response_model=MetricsResponse)
 async def get_metrics():
     """Get model performance metrics on held-out test set"""
     try:
@@ -447,7 +447,7 @@ async def get_metrics():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get metrics: {str(e)}")
 
-@app.post("/api/train", response_model=TrainingResponse)
+@app.post("/train", response_model=TrainingResponse)
 async def train_model(request: TrainingRequest, background_tasks: BackgroundTasks):
     """Trigger model training (runs in background)"""
     try:
@@ -463,7 +463,7 @@ async def train_model(request: TrainingRequest, background_tasks: BackgroundTask
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Training failed: {str(e)}")
 
-@app.get("/api/datasets/{dataset_name}", response_model=DatasetResponse)
+@app.get("/datasets/{dataset_name}", response_model=DatasetResponse)
 async def get_dataset(
     dataset_name: str,
     page: int = 1,
@@ -511,7 +511,7 @@ async def get_dataset(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load dataset: {str(e)}")
 
-@app.get("/api/random-example/{dataset_name}")
+@app.get("/random-example/{dataset_name}")
 async def get_random_example(dataset_name: str, disposition: Optional[str] = None):
     """Get a random example from the dataset for testing predictions"""
     try:
@@ -565,7 +565,7 @@ async def get_random_example(dataset_name: str, disposition: Optional[str] = Non
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get random example: {str(e)}")
 
-@app.get("/api/models")
+@app.get("/models")
 async def list_models():
     """List all available trained models"""
     try:
