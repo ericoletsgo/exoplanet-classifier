@@ -45,20 +45,21 @@ export default function PredictPage() {
     }
   }
 
-  const loadModelInfo = async () => {
-    try {
-      const metrics = await api.getMetrics()
-      setModelInfo(metrics.model_info)
-    } catch (err) {
-      console.error('Failed to load model info:', err)
-      // Set default model info if loading fails
-      setModelInfo({
-        n_features: 19,
-        n_samples: 0,
-        classes: ['FALSE POSITIVE', 'CANDIDATE', 'CONFIRMED']
-      })
-    }
-  }
+  // Optional model info loading - not used by default to prevent slow page loads
+  // const loadModelInfo = async () => {
+  //   try {
+  //     const metrics = await api.getMetrics()
+  //     setModelInfo(metrics.model_info)
+  //   } catch (err) {
+  //     console.error('Failed to load model info:', err)
+  //     // Set default model info if loading fails
+  //     setModelInfo({
+  //       n_features: 19,
+  //       n_samples: 0,
+  //       classes: ['FALSE POSITIVE', 'CANDIDATE', 'CONFIRMED']
+  //     })
+  //   }
+  // }
 
   const handleInputChange = (feature: string, value: string) => {
     setFormData(prev => ({
