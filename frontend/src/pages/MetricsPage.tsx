@@ -1,5 +1,8 @@
 import { useState, useEffect } from 'react'
 import { BarChart3, Loader2, AlertCircle, TrendingUp, Grid3X3, GitCompare } from 'lucide-react'
+import { api, type MetricsResponse } from '../lib/api'
+import { formatPercentage } from '../lib/utils'
+import HeatmapGrid from 'react-heatmap-grid'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -10,12 +13,9 @@ import {
   Legend,
   ArcElement,
   PointElement,
-  LineElement,
+  LineElement
 } from 'chart.js'
-import { Bar, Line } from 'react-chartjs-2'
-import HeatmapGrid from 'react-heatmap-grid'
-import { api, type MetricsResponse } from '../lib/api'
-import { formatPercentage, formatNumber } from '../lib/utils'
+import { Bar } from 'react-chartjs-2'
 
 ChartJS.register(
   CategoryScale,
@@ -33,15 +33,28 @@ export default function MetricsPage() {
   const [metrics, setMetrics] = useState<MetricsResponse | null>(null)
   const [correlations, setCorrelations] = useState<any>(null)
   const [models, setModels] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<'overview' | 'correlations' | 'comparison'>('overview')
 
   useEffect(() => {
-    loadMetrics()
-    loadCorrelations()
+    // Only load lightweight data on mount
     loadModels()
   }, [])
+
+  // Load metrics when overview tab is accessed
+  useEffect(() => {
+    if (activeTab === 'overview' && !metrics && !loading) {
+      loadMetrics()
+    }
+  }, [activeTab, metrics, loading])
+
+  // Load correlations when correlations tab is accessed
+  useEffect(() => {
+    if (activeTab === 'correlations' && !correlations) {
+      loadCorrelations()
+    }
+  }, [activeTab, correlations])
 
   const loadMetrics = async () => {
     setLoading(true)
@@ -72,178 +85,6 @@ export default function MetricsPage() {
     } catch (err) {
       console.error('Failed to load models:', err)
     }
-  }
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="w-8 h-8 animate-spin text-primary-500" />
-      </div>
-    )
-  }
-
-  if (error || !metrics) {
-    return (
-      <div className="card bg-red-900/20 border-red-700">
-        <div className="flex items-center gap-2 text-red-400">
-          <AlertCircle className="w-5 h-5" />
-          <p>{error || 'Failed to load metrics'}</p>
-        </div>
-      </div>
-    )
-  }
-
-  // Confusion Matrix Chart Data
-  // Calculate totals for each actual class (row sums)
-  const actualTotals = metrics.confusion_matrix.map(row => row.reduce((a, b) => a + b, 0))
-  
-  const confusionMatrixData = {
-    labels: ['False Positive', 'Candidate', 'Confirmed'],
-    datasets: metrics.confusion_matrix.map((row, idx) => ({
-      label: ['False Positive', 'Candidate', 'Confirmed'][idx],
-      data: row,
-      backgroundColor: [
-        'rgba(239, 68, 68, 0.5)',
-        'rgba(234, 179, 8, 0.5)',
-        'rgba(34, 197, 94, 0.5)',
-      ][idx],
-      borderColor: [
-        'rgba(239, 68, 68, 1)',
-        'rgba(234, 179, 8, 1)',
-        'rgba(34, 197, 94, 1)',
-      ][idx],
-      borderWidth: 1,
-    })),
-  }
-
-  // Feature Importance Chart Data
-  const topFeatures = metrics.feature_importances?.slice(0, 15) || []
-  const featureImportanceData = {
-    labels: topFeatures.map((f) => f.feature),
-    datasets: [
-      {
-        label: 'Importance',
-        data: topFeatures.map((f) => f.importance),
-        backgroundColor: 'rgba(59, 130, 246, 0.5)',
-        borderColor: 'rgba(59, 130, 246, 1)',
-        borderWidth: 1,
-      },
-    ],
-  }
-
-  // ROC Curve Data
-  const rocCurveData = metrics.roc_data
-    ? {
-        labels: [],
-        datasets: Object.entries(metrics.roc_data).map(([label, data], idx) => ({
-          label: `${label} (AUC: ${formatNumber(data.auc, 3)})`,
-          data: data.fpr.map((fpr, i) => ({ x: fpr, y: data.tpr[i] })),
-          borderColor: [
-            'rgba(239, 68, 68, 1)',
-            'rgba(234, 179, 8, 1)',
-            'rgba(34, 197, 94, 1)',
-          ][idx],
-          backgroundColor: [
-            'rgba(239, 68, 68, 0.1)',
-            'rgba(234, 179, 8, 0.1)',
-            'rgba(34, 197, 94, 0.1)',
-          ][idx],
-          borderWidth: 2,
-          pointRadius: 0,
-          tension: 0.1,
-        })),
-      }
-    : null
-
-  const confusionMatrixOptions = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: {
-        labels: {
-          color: 'rgb(203, 213, 225)',
-        },
-      },
-      tooltip: {
-        callbacks: {
-          title: (context: any[]) => {
-            const actualClass = context[0].label
-            return `Actual: ${actualClass}`
-          },
-          label: (context: any) => {
-            const predictedClass = context.dataset.label
-            const count = context.parsed.y
-            const actualClassIdx = context.dataIndex
-            const total = actualTotals[actualClassIdx]
-            const percentage = ((count / total) * 100).toFixed(1)
-            const isCorrect = context.datasetIndex === actualClassIdx
-            const status = isCorrect ? '✓ Correct' : '✗ Wrong'
-            
-            return `${status} - Predicted as ${predictedClass}: ${count}/${total} (${percentage}%)`
-          },
-        },
-      },
-    },
-    scales: {
-      x: {
-        title: {
-          display: true,
-          text: 'Actual Class',
-          color: 'rgb(203, 213, 225)',
-        },
-        ticks: { color: 'rgb(148, 163, 184)' },
-        grid: { color: 'rgba(148, 163, 184, 0.1)' },
-      },
-      y: {
-        title: {
-          display: true,
-          text: 'Count',
-          color: 'rgb(203, 213, 225)',
-        },
-        ticks: { color: 'rgb(148, 163, 184)' },
-        grid: { color: 'rgba(148, 163, 184, 0.1)' },
-      },
-    },
-  }
-
-  const chartOptions = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: {
-        labels: {
-          color: 'rgb(203, 213, 225)',
-        },
-      },
-    },
-    scales: {
-      x: {
-        ticks: { color: 'rgb(148, 163, 184)' },
-        grid: { color: 'rgba(148, 163, 184, 0.1)' },
-      },
-      y: {
-        ticks: { color: 'rgb(148, 163, 184)' },
-        grid: { color: 'rgba(148, 163, 184, 0.1)' },
-      },
-    },
-  }
-
-  const rocChartOptions = {
-    ...chartOptions,
-    scales: {
-      x: {
-        type: 'linear' as const,
-        title: { display: true, text: 'False Positive Rate', color: 'rgb(203, 213, 225)' },
-        ticks: { color: 'rgb(148, 163, 184)' },
-        grid: { color: 'rgba(148, 163, 184, 0.1)' },
-      },
-      y: {
-        type: 'linear' as const,
-        title: { display: true, text: 'True Positive Rate', color: 'rgb(203, 213, 225)' },
-        ticks: { color: 'rgb(148, 163, 184)' },
-        grid: { color: 'rgba(148, 163, 184, 0.1)' },
-      },
-    },
   }
 
   return (
@@ -285,88 +126,175 @@ export default function MetricsPage() {
 
       {/* Tab Content */}
       {activeTab === 'overview' && (
-        <>
-
-      {/* Key Metrics */}
-      <div className="grid md:grid-cols-4 gap-4">
-        {[
-          { label: 'Accuracy', value: metrics.accuracy, icon: TrendingUp },
-          { label: 'Precision', value: metrics.precision, icon: TrendingUp },
-          { label: 'Recall', value: metrics.recall, icon: TrendingUp },
-          { label: 'F1 Score', value: metrics.f1_score, icon: TrendingUp },
-        ].map((metric) => {
-          const Icon = metric.icon
-          return (
-            <div key={metric.label} className="card">
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-sm text-slate-400">{metric.label}</p>
-                <Icon className="w-4 h-4 text-primary-500" />
+        <div className="space-y-6">
+          {loading ? (
+            <div className="card">
+              <div className="text-center py-8">
+                <Loader2 className="w-8 h-8 animate-spin text-primary-500 mx-auto mb-4" />
+                <p className="text-slate-400">Loading model performance metrics...</p>
+                <p className="text-sm text-slate-500 mt-2">This may take a few moments as we calculate accuracy, precision, and other metrics.</p>
               </div>
-              <p className="text-3xl font-bold text-white">
-                {formatPercentage(metric.value)}
-              </p>
             </div>
-          )
-        })}
-      </div>
-
-      {/* Model Info */}
-      <div className="card">
-        <h3 className="text-xl font-semibold mb-4">Model Information</h3>
-        <div className="grid md:grid-cols-3 gap-4">
-          <div>
-            <p className="text-sm text-slate-400">Model Type</p>
-            <p className="font-semibold">{metrics.model_info.model_type}</p>
-          </div>
-          <div>
-            <p className="text-sm text-slate-400">Features</p>
-            <p className="font-semibold">{metrics.model_info.n_features}</p>
-          </div>
-          <div>
-            <p className="text-sm text-slate-400">Samples</p>
-            <p className="font-semibold">{metrics.model_info.n_samples?.toLocaleString()}</p>
-          </div>
-        </div>
-      </div>
-
-      {/* Charts */}
-      <div className="grid md:grid-cols-2 gap-6">
-        {/* Confusion Matrix */}
-        <div className="card">
-          <h3 className="text-xl font-semibold mb-4">Confusion Matrix</h3>
-          <p className="text-sm text-slate-400 mb-4">Hover over bars to see counts and percentages</p>
-          <div className="h-80">
-            <Bar data={confusionMatrixData} options={confusionMatrixOptions} />
-          </div>
-        </div>
-
-        {/* ROC Curve */}
-        {rocCurveData && (
-          <div className="card">
-            <h3 className="text-xl font-semibold mb-4">ROC Curves</h3>
-            <div className="h-80">
-              <Line data={rocCurveData} options={rocChartOptions} />
+          ) : error ? (
+            <div className="card bg-red-900/20 border-red-700">
+              <div className="flex items-center gap-2 text-red-400">
+                <AlertCircle className="w-5 h-5" />
+                <p>{error}</p>
+              </div>
             </div>
-          </div>
-        )}
-      </div>
+          ) : metrics ? (
+            <>
+              {/* Key Metrics */}
+              <div className="grid md:grid-cols-4 gap-4">
+                {[
+                  { label: 'Accuracy', value: metrics.accuracy, icon: TrendingUp },
+                  { label: 'Precision', value: metrics.precision, icon: TrendingUp },
+                  { label: 'Recall', value: metrics.recall, icon: TrendingUp },
+                  { label: 'F1 Score', value: metrics.f1_score, icon: TrendingUp },
+                ].map((metric) => {
+                  const Icon = metric.icon
+                  return (
+                    <div key={metric.label} className="card">
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-sm text-slate-400">{metric.label}</p>
+                        <Icon className="w-4 h-4 text-primary-500" />
+                      </div>
+                      <p className="text-3xl font-bold text-white">
+                        {formatPercentage(metric.value)}
+                      </p>
+                    </div>
+                  )
+                })}
+              </div>
 
-      {/* Feature Importance */}
-      {topFeatures.length > 0 && (
-        <div className="card">
-          <h3 className="text-xl font-semibold mb-4">Top 15 Feature Importances</h3>
-          <div className="h-96">
-            <Bar
-              data={featureImportanceData}
-              options={{
-                ...chartOptions,
-                indexAxis: 'y' as const,
-              }}
-            />
-          </div>
+              {/* Model Info */}
+              <div className="card">
+                <h3 className="text-xl font-semibold mb-4">Model Information</h3>
+                <div className="grid md:grid-cols-2 gap-6">
+                  <div>
+                    <p className="text-sm text-slate-400 mb-1">Model Type</p>
+                    <p className="font-semibold">{metrics.model_info.model_type}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-slate-400 mb-1">Features Used</p>
+                    <p className="font-semibold">{metrics.model_info.n_features}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-slate-400 mb-1">Training Samples</p>
+                    <p className="font-semibold">{metrics.model_info.n_samples.toLocaleString()}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-slate-400 mb-1">Classes</p>
+                    <p className="font-semibold">{metrics.model_info.classes.join(', ')}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Confusion Matrix */}
+              <div className="card">
+                <h3 className="text-xl font-semibold mb-4">Confusion Matrix</h3>
+                <div className="h-80">
+                  <Bar
+                    data={{
+                      labels: ['False Positive', 'Candidate', 'Confirmed Planet'],
+                      datasets: [
+                        {
+                          label: 'Predicted as False Positive',
+                          data: [metrics.confusion_matrix[0][0], metrics.confusion_matrix[1][0], metrics.confusion_matrix[2][0]],
+                          backgroundColor: 'rgba(239, 68, 68, 0.8)',
+                        },
+                        {
+                          label: 'Predicted as Candidate',
+                          data: [metrics.confusion_matrix[0][1], metrics.confusion_matrix[1][1], metrics.confusion_matrix[2][1]],
+                          backgroundColor: 'rgba(245, 158, 11, 0.8)',
+                        },
+                        {
+                          label: 'Predicted as Confirmed',
+                          data: [metrics.confusion_matrix[0][2], metrics.confusion_matrix[1][2], metrics.confusion_matrix[2][2]],
+                          backgroundColor: 'rgba(34, 197, 94, 0.8)',
+                        },
+                      ],
+                    }}
+                    options={{
+                      responsive: true,
+                      maintainAspectRatio: false,
+                      plugins: {
+                        legend: {
+                          labels: {
+                            color: 'rgb(203, 213, 225)',
+                          },
+                        },
+                      },
+                      scales: {
+                        x: {
+                          title: {
+                            display: true,
+                            text: 'Actual Class',
+                            color: 'rgb(203, 213, 225)',
+                          },
+                          ticks: { color: 'rgb(148, 163, 184)' },
+                          grid: { color: 'rgba(148, 163, 184, 0.1)' },
+                        },
+                        y: {
+                          title: {
+                            display: true,
+                            text: 'Count',
+                            color: 'rgb(203, 213, 225)',
+                          },
+                          ticks: { color: 'rgb(148, 163, 184)' },
+                          grid: { color: 'rgba(148, 163, 184, 0.1)' },
+                        },
+                      },
+                    }}
+                  />
+                </div>
+              </div>
+
+              {/* Feature Importance */}
+              {metrics.feature_importances && metrics.feature_importances.length > 0 && (
+                <div className="card">
+                  <h3 className="text-xl font-semibold mb-4">Top Feature Importance</h3>
+                  <div className="h-80">
+                    <Bar
+                      data={{
+                        labels: metrics.feature_importances.slice(0, 10).map(f => f.feature.replace('koi_', '').replace('_', ' ')),
+                        datasets: [
+                          {
+                            label: 'Importance',
+                            data: metrics.feature_importances.slice(0, 10).map(f => f.importance),
+                            backgroundColor: 'rgba(59, 130, 246, 0.8)',
+                          },
+                        ],
+                      }}
+                      options={{
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                          legend: {
+                            labels: {
+                              color: 'rgb(203, 213, 225)',
+                            },
+                          },
+                        },
+                        scales: {
+                          x: {
+                            ticks: { color: 'rgb(148, 163, 184)' },
+                            grid: { color: 'rgba(148, 163, 184, 0.1)' },
+                          },
+                          y: {
+                            ticks: { color: 'rgb(148, 163, 184)' },
+                            grid: { color: 'rgba(148, 163, 184, 0.1)' },
+                          },
+                        },
+                        indexAxis: 'y' as const,
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+            </>
+          ) : null}
         </div>
-      )}
-        </>
       )}
 
       {/* Feature Correlations Tab */}
@@ -374,7 +302,15 @@ export default function MetricsPage() {
         <div className="space-y-6">
           <div className="card">
             <h3 className="text-xl font-semibold mb-4">Feature Correlation Matrix</h3>
-            {correlations ? (
+            {!correlations ? (
+              <div className="flex items-center justify-center h-64">
+                <div className="text-center">
+                  <Loader2 className="w-8 h-8 animate-spin text-primary-500 mx-auto mb-4" />
+                  <p className="text-slate-400">Loading correlation matrix...</p>
+                  <p className="text-sm text-slate-500 mt-2">Analyzing feature relationships in the dataset.</p>
+                </div>
+              </div>
+            ) : (
               <>
                 <p className="text-sm text-slate-400 mb-4">
                   Correlation analysis based on {correlations.sample_size.toLocaleString()} samples from the dataset.
@@ -398,10 +334,6 @@ export default function MetricsPage() {
                   </div>
                 </div>
               </>
-            ) : (
-              <div className="flex items-center justify-center h-64">
-                <Loader2 className="w-8 h-8 animate-spin text-primary-500" />
-              </div>
             )}
           </div>
         </div>
