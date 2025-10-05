@@ -196,13 +196,15 @@ class Hyperparameters(BaseModel):
     lgb_num_leaves: int = Field(default=31, ge=10, le=100, description="Maximum number of leaves in one tree")
 
 class TrainingRequest(BaseModel):
-    dataset: str = Field(default="koi.csv", description="Dataset to train on (koi.csv, k2.csv, toi.csv)")
+    dataset: str = Field(default="koi.csv", description="Dataset to train on (koi.csv, k2.csv, toi.csv, or 'combined' for all datasets)")
     model_name: str = Field(default="New Model", description="Name for the trained model")
     description: str = Field(default="", description="Description of the model")
     test_size: float = Field(default=0.2, description="Test set size (0.1-0.5)")
     algorithms: List[str] = Field(default=["gradient_boosting", "random_forest", "xgboost", "lightgbm"], description="Algorithms to include in ensemble")
     hyperparameters: Optional[Hyperparameters] = Field(default=None, description="Algorithm-specific hyperparameters")
     use_hyperparameter_tuning: bool = Field(default=False, description="Enable hyperparameter tuning with grid search")
+    include_k2: bool = Field(default=False, description="Include K2 dataset in combined training")
+    include_toi: bool = Field(default=False, description="Include TOI dataset in combined training")
 
 class TrainingResponse(BaseModel):
     status: str
@@ -488,15 +490,62 @@ async def get_metrics():
 async def train_advanced_ensemble(request: TrainingRequest, background_tasks: BackgroundTasks):
     """Advanced ensemble training matching Streamlit functionality"""
     try:
-        # Load the dataset
-        dataset_path = os.path.join(DATA_DIR, request.dataset)
-        if not os.path.exists(dataset_path):
-            raise HTTPException(status_code=404, detail=f"Dataset not found: {request.dataset}")
-        
-        # Load and prepare data (same as Streamlit)
-        df = pd.read_csv(dataset_path, comment='#')
-        df['target'] = df['koi_disposition'].map({'CONFIRMED': 2, 'CANDIDATE': 1, 'FALSE POSITIVE': 0})
-        df = df[df['target'].notna()]
+        # Load the dataset(s)
+        if request.dataset == "combined":
+            # Load multiple datasets and combine them
+            datasets = []
+            dataset_info = []
+            
+            # Always include KOI as base
+            koi_path = os.path.join(DATA_DIR, "koi.csv")
+            if os.path.exists(koi_path):
+                koi_df = pd.read_csv(koi_path, comment='#')
+                koi_df['target'] = koi_df['koi_disposition'].map({'CONFIRMED': 2, 'CANDIDATE': 1, 'FALSE POSITIVE': 0})
+                koi_df = koi_df[koi_df['target'].notna()]
+                koi_df['dataset_source'] = 'koi'
+                datasets.append(koi_df)
+                dataset_info.append(f"KOI: {len(koi_df)} samples")
+            
+            # Include K2 if requested
+            if request.include_k2:
+                k2_path = os.path.join(DATA_DIR, "k2_converted.csv")
+                if os.path.exists(k2_path):
+                    k2_df = pd.read_csv(k2_path, comment='#')
+                    k2_df['target'] = k2_df['koi_disposition'].map({'CONFIRMED': 2, 'CANDIDATE': 1, 'FALSE POSITIVE': 0})
+                    k2_df = k2_df[k2_df['target'].notna()]
+                    k2_df['dataset_source'] = 'k2'
+                    datasets.append(k2_df)
+                    dataset_info.append(f"K2: {len(k2_df)} samples")
+            
+            # Include TOI if requested
+            if request.include_toi:
+                toi_path = os.path.join(DATA_DIR, "toi.csv")
+                if os.path.exists(toi_path):
+                    toi_df = pd.read_csv(toi_path, comment='#')
+                    # TOI uses different disposition mapping - convert to standard format
+                    toi_df['target'] = toi_df['koi_disposition'].map({'CONFIRMED': 2, 'CANDIDATE': 1, 'FALSE POSITIVE': 0})
+                    toi_df = toi_df[toi_df['target'].notna()]
+                    toi_df['dataset_source'] = 'toi'
+                    datasets.append(toi_df)
+                    dataset_info.append(f"TOI: {len(toi_df)} samples")
+            
+            if len(datasets) == 0:
+                raise HTTPException(status_code=404, detail="No datasets found for combined training")
+            
+            # Combine all datasets
+            df = pd.concat(datasets, ignore_index=True, sort=False)
+            print(f"[INFO] Combined dataset created with {len(df)} samples from: {', '.join(dataset_info)}")
+            
+        else:
+            # Single dataset training (original logic)
+            dataset_path = os.path.join(DATA_DIR, request.dataset)
+            if not os.path.exists(dataset_path):
+                raise HTTPException(status_code=404, detail=f"Dataset not found: {request.dataset}")
+            
+            df = pd.read_csv(dataset_path, comment='#')
+            df['target'] = df['koi_disposition'].map({'CONFIRMED': 2, 'CANDIDATE': 1, 'FALSE POSITIVE': 0})
+            df = df[df['target'].notna()]
+            df['dataset_source'] = request.dataset.replace('.csv', '')
         
         # Get numeric features (same approach as Streamlit)
         numeric_features = df.select_dtypes(include=[np.number]).columns.tolist()
@@ -709,6 +758,13 @@ async def train_advanced_ensemble(request: TrainingRequest, background_tasks: Ba
         with open(metadata_file, 'w') as f:
             json.dump(metadata, f, indent=2)
         
+        # Create dataset summary with source information
+        dataset_summary = {
+            'total_samples': len(X), 
+            'features': len(numeric_features),
+            'dataset_sources': df['dataset_source'].value_counts().to_dict() if 'dataset_source' in df.columns else {request.dataset.replace('.csv', ''): len(X)}
+        }
+        
         return TrainingResponse(
             status="completed",
             message=f"🎯 Ensemble trained successfully! CV Accuracy: {cv_accuracy:.1%}, Test Accuracy: {metrics['accuracy']:.1%}",
@@ -716,7 +772,7 @@ async def train_advanced_ensemble(request: TrainingRequest, background_tasks: Ba
             metrics=metrics,
             algorithms_used=algorithms_used,
             cv_accuracy=cv_accuracy,
-            dataset_summary={'total_samples': len(X), 'features': len(numeric_features)}
+            dataset_summary=dataset_summary
         )
         
     except Exception as e:
@@ -781,7 +837,12 @@ async def get_random_example(dataset_name: str, disposition: Optional[str] = Non
         if dataset_name not in valid_datasets:
             raise HTTPException(status_code=400, detail=f"Invalid dataset. Must be one of: {valid_datasets}")
         
-        file_path = os.path.join(DATA_DIR, f"{dataset_name}.csv")
+        # Use k2_converted for K2 dataset
+        if dataset_name == "k2":
+            file_path = os.path.join(DATA_DIR, "k2_converted.csv")
+        else:
+            file_path = os.path.join(DATA_DIR, f"{dataset_name}.csv")
+            
         if not os.path.exists(file_path):
             raise HTTPException(status_code=404, detail=f"Dataset file not found: {file_path}")
         
@@ -812,7 +873,78 @@ async def get_random_example(dataset_name: str, disposition: Optional[str] = Non
         # Get additional metadata
         metadata = {
             'row_index': int(random_row.name),
-            'koi_name': str(random_row.get('kepoi_name', 'Unknown')),
+            'koi_name': str(random_row.get('kepoi_name', random_row.get('toi_id', 'Unknown'))),
+            'expected_disposition': str(random_row.get('koi_disposition', 'Unknown')),
+            'dataset': dataset_name
+        }
+        
+        return {
+            'features': features,
+            'metadata': metadata,
+            'raw_row': random_row.replace({np.nan: None}).to_dict()
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get random example: {str(e)}")
+
+@app.options("/random-example")
+@app.get("/random-example")
+async def get_random_example_from_all_datasets(disposition: Optional[str] = None):
+    """Get a random example from all available datasets"""
+    try:
+        # Get all available datasets
+        available_datasets = []
+        
+        # Check KOI
+        koi_path = os.path.join(DATA_DIR, "koi.csv")
+        if os.path.exists(koi_path):
+            koi_df = pd.read_csv(koi_path, comment='#')
+            if disposition and 'koi_disposition' in koi_df.columns:
+                koi_df = koi_df[koi_df['koi_disposition'] == disposition.upper()]
+            if len(koi_df) > 0:
+                available_datasets.append(('koi', koi_df, koi_path))
+        
+        # Check K2
+        k2_path = os.path.join(DATA_DIR, "k2_converted.csv")
+        if os.path.exists(k2_path):
+            k2_df = pd.read_csv(k2_path, comment='#')
+            if disposition and 'koi_disposition' in k2_df.columns:
+                k2_df = k2_df[k2_df['koi_disposition'] == disposition.upper()]
+            if len(k2_df) > 0:
+                available_datasets.append(('k2', k2_df, k2_path))
+        
+        # Check TOI
+        toi_path = os.path.join(DATA_DIR, "toi.csv")
+        if os.path.exists(toi_path):
+            toi_df = pd.read_csv(toi_path, comment='#')
+            if disposition and 'koi_disposition' in toi_df.columns:
+                toi_df = toi_df[toi_df['koi_disposition'] == disposition.upper()]
+            if len(toi_df) > 0:
+                available_datasets.append(('toi', toi_df, toi_path))
+        
+        if len(available_datasets) == 0:
+            raise HTTPException(status_code=404, detail=f"No examples found for disposition: {disposition}")
+        
+        # Randomly select a dataset
+        dataset_name, df, _ = np.random.choice(available_datasets, p=[1/len(available_datasets)] * len(available_datasets))
+        
+        # Get random row from selected dataset
+        random_row = df.sample(n=1).iloc[0]
+        
+        # Extract key features for the frontend
+        feature_names = get_all_relevant_features()
+        features = {}
+        
+        for feature in feature_names:
+            if feature in random_row and pd.notna(random_row[feature]):
+                features[feature] = float(random_row[feature])
+            else:
+                features[feature] = 0.0
+        
+        # Get additional metadata
+        metadata = {
+            'row_index': int(random_row.name),
+            'koi_name': str(random_row.get('kepoi_name', random_row.get('toi_id', 'Unknown'))),
             'expected_disposition': str(random_row.get('koi_disposition', 'Unknown')),
             'dataset': dataset_name
         }

@@ -153,6 +153,7 @@ class APIClient {
     }>(url)
   }
 
+
   async getFeatureCorrelations() {
     return this.request<{
       features: string[]
@@ -191,6 +192,8 @@ class APIClient {
       lgb_num_leaves?: number
     }
     use_hyperparameter_tuning?: boolean
+    include_k2?: boolean
+    include_toi?: boolean
   }) {
     return this.request<{
       status: string

@@ -104,6 +104,7 @@ export default function PredictPage() {
     }
   }
 
+
   const handleReset = () => {
     if (features) {
       const resetData: Record<string, number> = {}
@@ -172,6 +173,9 @@ export default function PredictPage() {
             Random False Positive
           </button>
         </div>
+        <p className="text-sm text-slate-500 mt-3">
+          These buttons sample random examples from the KOI dataset.
+        </p>
       </div>
 
       {/* Random Example Information */}
