@@ -22,10 +22,13 @@ export default function PredictPage() {
   const [error, setError] = useState<string | null>(null)
   const [activeCategory, setActiveCategory] = useState<string>('signal_quality')
   const [randomExampleData, setRandomExampleData] = useState<RandomExampleData | null>(null)
+  const [models, setModels] = useState<any[]>([])
+  const [selectedModelId, setSelectedModelId] = useState<string | null>(null)
   // const [modelInfo, setModelInfo] = useState<any>(null) // Not used to prevent slow loading
 
   useEffect(() => {
     loadFeatures()
+    loadModels()
     // Model info loading is optional - will load when needed
   }, [])
 
@@ -42,6 +45,15 @@ export default function PredictPage() {
       setFormData(initialData)
     } catch (err) {
       setError('Failed to load features')
+    }
+  }
+
+  const loadModels = async () => {
+    try {
+      const response = await api.listModels()
+      setModels(response.models || [])
+    } catch (err) {
+      console.error('Failed to load models:', err)
     }
   }
 
@@ -80,8 +92,11 @@ export default function PredictPage() {
       if (randomExampleData) {
         result = await api.predictRaw(randomExampleData.raw_row)
       } else {
-        // For manual input, use regular prediction
-        result = await api.predict({ features: formData })
+        // For manual input, use regular prediction with selected model
+        result = await api.predict({ 
+          features: formData,
+          model_id: selectedModelId || undefined
+        })
       }
       
       setPrediction(result)
@@ -145,7 +160,40 @@ export default function PredictPage() {
         </div>
       </div>
 
-      {/* Model Information - Removed to prevent slow loading */}
+      {/* Model Selection */}
+      {models.length > 0 && (
+        <div className="card">
+          <h3 className="text-lg font-semibold mb-3">Select Model</h3>
+          <div className="flex items-center gap-4">
+            <select
+              value={selectedModelId || ''}
+              onChange={(e) => setSelectedModelId(e.target.value || null)}
+              className="input-field flex-1"
+            >
+              <option value="">Default Model (Latest)</option>
+              {models.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.name} - {(model.test_accuracy * 100).toFixed(1)}% accuracy
+                  {model.created_at && ` (${new Date(model.created_at).toLocaleDateString()})`}
+                </option>
+              ))}
+            </select>
+            {selectedModelId && (
+              <button
+                onClick={() => setSelectedModelId(null)}
+                className="text-sm text-slate-400 hover:text-slate-300"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          <p className="text-xs text-slate-500 mt-2">
+            {selectedModelId 
+              ? `Using model: ${models.find(m => m.id === selectedModelId)?.name || 'Unknown'}`
+              : 'Using the default model for predictions'}
+          </p>
+        </div>
+      )}
 
       {/* Random Example Buttons */}
       <div className="card">

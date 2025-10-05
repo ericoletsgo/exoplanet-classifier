@@ -18,7 +18,7 @@ from sklearn.preprocessing import label_binarize
 app = FastAPI(
     title="Exoplanet Classifier API",
     description="REST API for exoplanet classification using machine learning",
-    version="1.0.3"  # Bumped to force new deployment with random-example fixes
+    version="1.0.9"  # Bumped to force deployment with metrics and predict-raw fixes
 )
 
 # CORS middleware to allow frontend requests
@@ -153,12 +153,19 @@ def get_all_relevant_features():
 # Pydantic models
 class PredictionRequest(BaseModel):
     features: Dict[str, float] = Field(..., description="Feature values for prediction")
+    model_id: Optional[str] = Field(default=None, description="Specific model ID to use for prediction")
 
 class PredictionResponse(BaseModel):
     prediction: str
     confidence: float
     probabilities: Dict[str, float]
     prediction_class: int
+
+class BatchPredictionRequest(BaseModel):
+    records: List[Dict[str, float]] = Field(..., description="List of records for batch prediction")
+
+class BatchPredictionResponse(BaseModel):
+    predictions: List[PredictionResponse]
 
 class MetricsResponse(BaseModel):
     accuracy: float
@@ -196,7 +203,7 @@ class Hyperparameters(BaseModel):
     lgb_num_leaves: int = Field(default=31, ge=10, le=100, description="Maximum number of leaves in one tree")
 
 class TrainingRequest(BaseModel):
-    dataset: str = Field(default="koi.csv", description="Dataset to train on (koi.csv, k2.csv, toi.csv, or 'combined' for all datasets)")
+    dataset: str = Field(default="koi.csv", description="Dataset to train on (koi.csv, k2.csv, or 'combined' for KOI+K2)")
     model_name: str = Field(default="New Model", description="Name for the trained model")
     description: str = Field(default="", description="Description of the model")
     test_size: float = Field(default=0.2, description="Test set size (0.1-0.5)")
@@ -204,7 +211,9 @@ class TrainingRequest(BaseModel):
     hyperparameters: Optional[Hyperparameters] = Field(default=None, description="Algorithm-specific hyperparameters")
     use_hyperparameter_tuning: bool = Field(default=False, description="Enable hyperparameter tuning with grid search")
     include_k2: bool = Field(default=False, description="Include K2 dataset in combined training")
-    include_toi: bool = Field(default=False, description="Include TOI dataset in combined training")
+    target_column: Optional[str] = Field(default=None, description="Target column name (auto-detected if not specified)")
+    target_mapping: Optional[Dict[str, int]] = Field(default=None, description="Custom mapping of target values to classes (0, 1, 2)")
+    csv_data: Optional[str] = Field(default=None, description="CSV file content as string (for uploaded files)")
 
 class TrainingResponse(BaseModel):
     status: str
@@ -234,13 +243,35 @@ def load_model():
         print(f"[DEBUG] Model exists: {os.path.exists(MODEL_PATH)}")
         print(f"[DEBUG] Current working directory: {os.getcwd()}")
         print(f"[DEBUG] Files in current dir: {os.listdir('.')}")
+        print(f"[DEBUG] BASE_DIR: {BASE_DIR}")
+        print(f"[DEBUG] Files in BASE_DIR: {os.listdir(BASE_DIR) if os.path.exists(BASE_DIR) else 'BASE_DIR not found'}")
         
-        if not os.path.exists(MODEL_PATH):
-            raise HTTPException(status_code=404, detail=f"Model file not found: {MODEL_PATH}")
+        # Try multiple possible model locations
+        possible_paths = [
+            MODEL_PATH,
+            os.path.join(BASE_DIR, "balanced_model_20251005_115605.joblib"),
+            os.path.join(os.getcwd(), "properly_trained_model.joblib"),
+            os.path.join(os.getcwd(), "balanced_model_20251005_115605.joblib"),
+            "/app/properly_trained_model.joblib",
+            "/app/balanced_model_20251005_115605.joblib"
+        ]
+        
+        model_path_to_use = None
+        for path in possible_paths:
+            if os.path.exists(path):
+                print(f"[INFO] Found model at: {path}")
+                model_path_to_use = path
+                break
+        
+        if not model_path_to_use:
+            print(f"[ERROR] Model not found in any of these locations:")
+            for path in possible_paths:
+                print(f"  - {path}")
+            raise HTTPException(status_code=404, detail=f"Model file not found. Checked: {possible_paths}")
         
         try:
-            print(f"[INFO] Loading model from {MODEL_PATH}")
-            _model_cache = joblib.load(MODEL_PATH)
+            print(f"[INFO] Loading model from {model_path_to_use}")
+            _model_cache = joblib.load(model_path_to_use)
             print(f"[INFO] Model loaded successfully: {type(_model_cache).__name__}")
         except Exception as e:
             print(f"[ERROR] Failed to load model: {str(e)}")
@@ -248,13 +279,39 @@ def load_model():
     
     return _model_cache
 
+def get_model():
+    """Get the loaded model, loading it if necessary"""
+    return load_model()
+
+@app.on_event("startup")
+def load_model_on_startup():
+    """Load the trained model at application startup"""
+    try:
+        load_model()
+        print("[INFO] Model loaded successfully at startup")
+    except Exception as e:
+        print(f"[ERROR] Failed to load model at startup: {str(e)}")
+
 def get_feature_names(model):
     """Extract feature names from model"""
-    if hasattr(model, 'feature_names'):
-        return model.feature_names
-    elif hasattr(model, 'feature_names_in_'):
+    # For Pipeline objects, use the model's feature_names_in_ (input features)
+    if hasattr(model, 'feature_names_in_'):
         return model.feature_names_in_.tolist()
+    
+    # Handle Pipeline objects with steps
+    if hasattr(model, 'steps') and len(model.steps) > 0:
+        # For Pipeline, get features from the last step (usually the classifier)
+        last_step = model.steps[-1][1]
+        if hasattr(last_step, 'feature_names_in_'):
+            return last_step.feature_names_in_.tolist()
+        elif hasattr(last_step, 'feature_names'):
+            return last_step.feature_names
+    
+    # Handle regular models
+    elif hasattr(model, 'feature_names'):
+        return model.feature_names
     else:
+        # Fallback to our predefined features
         return get_all_relevant_features()
 
 # API Endpoints
@@ -294,22 +351,27 @@ async def get_features():
 async def predict(request: PredictionRequest):
     """Make a prediction using the trained model"""
     try:
-        model = load_model()
+        # Load specific model if model_id provided, otherwise use default
+        if request.model_id:
+            model_path = os.path.join(MODELS_DIR, f"{request.model_id}.joblib")
+            if not os.path.exists(model_path):
+                raise HTTPException(status_code=404, detail=f"Model {request.model_id} not found")
+            model = joblib.load(model_path)
+        else:
+            model = get_model()
+        
         feature_names = get_feature_names(model)
         
-        # Create feature vector in correct order
+        # Create feature vector with all required features
         feature_vector = []
-        missing_features = []
         
         for feature in feature_names:
-            if feature in request.features:
-                feature_vector.append(request.features[feature])
-            else:
-                feature_vector.append(0.0)  # Default to 0 for missing features
-                missing_features.append(feature)
+            # Use provided value or default to 0
+            feature_vector.append(request.features.get(feature, 0.0))
         
         # Make prediction
-        X = np.array([feature_vector])
+        import pandas as pd
+        X = pd.DataFrame([feature_vector], columns=feature_names)
         prediction = model.predict(X)[0]
         probabilities = model.predict_proba(X)[0]
         
@@ -334,16 +396,68 @@ async def predict(request: PredictionRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
 
-@app.options("/predict-raw")
+@app.post("/batch-predict", response_model=BatchPredictionResponse)
+async def batch_predict(request: BatchPredictionRequest):
+    """Make predictions for a batch of records - MUCH faster than individual predictions"""
+    try:
+        model = get_model()
+        feature_names = get_feature_names(model)
+
+        # Create feature matrix for the entire batch
+        feature_matrix = []
+        for record in request.records:
+            # Create feature vector with all required features
+            feature_vector = []
+            for feature in feature_names:
+                feature_vector.append(record.get(feature, 0.0))
+            feature_matrix.append(feature_vector)
+
+        if not feature_matrix:
+            return BatchPredictionResponse(predictions=[])
+
+        # Make predictions in a single batch (vectorized operation)
+        # Create DataFrame with proper feature names to avoid sklearn warnings
+        import pandas as pd
+        X = pd.DataFrame(feature_matrix, columns=feature_names)
+        predictions = model.predict(X)
+        probabilities = model.predict_proba(X)
+
+        # Map predictions to labels
+        label_map = {0: "FALSE POSITIVE", 1: "CANDIDATE", 2: "CONFIRMED"}
+        results = []
+        for i in range(len(predictions)):
+            pred_class = int(predictions[i])
+            pred_label = label_map.get(pred_class, "UNKNOWN")
+            probs = probabilities[i]
+            prob_dict = {
+                "FALSE POSITIVE": float(probs[0]),
+                "CANDIDATE": float(probs[1]),
+                "CONFIRMED": float(probs[2])
+            }
+            
+            results.append(PredictionResponse(
+                prediction=pred_label,
+                confidence=float(max(probs)),
+                probabilities=prob_dict,
+                prediction_class=pred_class
+            ))
+
+        return BatchPredictionResponse(predictions=results)
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Batch prediction failed: {str(e)}")
+
 @app.post("/predict-raw", response_model=PredictionResponse)
 async def predict_raw(request: dict):
     """Make a prediction using raw dataset row data"""
     try:
-        model = load_model()
+        model = get_model()
         feature_names = get_feature_names(model)
         
-        # Extract features from raw row data
+        # Create feature vector with all required features
         feature_vector = []
+        
+        import pandas as pd
         for feature in feature_names:
             if feature in request and pd.notna(request[feature]):
                 feature_vector.append(float(request[feature]))
@@ -351,7 +465,8 @@ async def predict_raw(request: dict):
                 feature_vector.append(0.0)
         
         # Make prediction
-        X = np.array([feature_vector])
+        import pandas as pd
+        X = pd.DataFrame([feature_vector], columns=feature_names)
         prediction = model.predict(X)[0]
         probabilities = model.predict_proba(X)[0]
         
@@ -381,7 +496,7 @@ async def predict_raw(request: dict):
 async def get_metrics():
     """Get model performance metrics on held-out test set"""
     try:
-        model = load_model()
+        model = get_model()
         
         # Get feature names from model
         feature_names = get_feature_names(model)
@@ -395,6 +510,31 @@ async def get_metrics():
             X = test_data['X_test']
             y = test_data['y_test']
             print(f"[INFO] Test set loaded: {len(X)} samples")
+            
+            # Check if test set features match model features
+            model_features = set(feature_names)
+            test_features = set(X.columns)
+            
+            if model_features != test_features:
+                print(f"[WARNING] Test set features don't match model features!")
+                print(f"[WARNING] Model expects {len(model_features)} features, test set has {len(test_features)}")
+                print(f"[WARNING] Missing features: {model_features - test_features}")
+                print(f"[WARNING] Using full dataset instead of test set for metrics")
+                
+                # Fallback to full dataset
+                koi_path = os.path.join(DATA_DIR, "koi.csv")
+                if not os.path.exists(koi_path):
+                    raise HTTPException(status_code=404, detail="Dataset not found")
+                
+                df = pd.read_csv(koi_path, comment='#')
+                df['target'] = df['koi_disposition'].map({'CONFIRMED': 2, 'CANDIDATE': 1, 'FALSE POSITIVE': 0})
+                df = df[df['target'].notna()]
+                
+                # Get features
+                available_features = [f for f in feature_names if f in df.columns]
+                
+                X = df[available_features].fillna(0)
+                y = df['target'].astype(int)
         else:
             # Fallback: Load full dataset (will show warning)
             # This is NOT ideal - metrics will be inflated
@@ -491,7 +631,43 @@ async def train_advanced_ensemble(request: TrainingRequest, background_tasks: Ba
     """Advanced ensemble training matching Streamlit functionality"""
     try:
         # Load the dataset(s)
-        if request.dataset == "combined":
+        if request.csv_data:
+            # Handle uploaded CSV data
+            print(f"[INFO] Loading uploaded CSV data")
+            from io import StringIO
+            df = pd.read_csv(StringIO(request.csv_data), comment='#')
+            print(f"[INFO] CSV loaded: {len(df)} samples")
+            
+            # Determine target column
+            if request.target_column:
+                disposition_col = request.target_column
+                if disposition_col not in df.columns:
+                    raise HTTPException(status_code=400, detail=f"Target column '{disposition_col}' not found in CSV")
+            else:
+                # Auto-detect disposition column
+                disposition_col = None
+                if 'koi_disposition' in df.columns:
+                    disposition_col = 'koi_disposition'
+                elif 'disposition' in df.columns:
+                    disposition_col = 'disposition'
+                else:
+                    raise HTTPException(status_code=400, detail="No disposition column found in CSV. Please specify target_column.")
+            
+            print(f"[INFO] Using target column: {disposition_col}")
+            print(f"[INFO] Target distribution: {df[disposition_col].value_counts().to_dict()}")
+            
+            # Use custom mapping if provided, otherwise use default
+            if request.target_mapping:
+                df['target'] = df[disposition_col].map(request.target_mapping)
+            else:
+                df['target'] = df[disposition_col].map({'CONFIRMED': 2, 'CANDIDATE': 1, 'FALSE POSITIVE': 0})
+            
+            df = df[df['target'].notna()]
+            df['dataset_source'] = 'uploaded_csv'
+            
+            print(f"[INFO] Valid samples after filtering: {len(df)}")
+            
+        elif request.dataset == "combined":
             # Load multiple datasets and combine them
             datasets = []
             dataset_info = []
@@ -517,18 +693,6 @@ async def train_advanced_ensemble(request: TrainingRequest, background_tasks: Ba
                     datasets.append(k2_df)
                     dataset_info.append(f"K2: {len(k2_df)} samples")
             
-            # Include TOI if requested
-            if request.include_toi:
-                toi_path = os.path.join(DATA_DIR, "toi.csv")
-                if os.path.exists(toi_path):
-                    toi_df = pd.read_csv(toi_path, comment='#')
-                    # TOI uses different disposition mapping - convert to standard format
-                    toi_df['target'] = toi_df['koi_disposition'].map({'CONFIRMED': 2, 'CANDIDATE': 1, 'FALSE POSITIVE': 0})
-                    toi_df = toi_df[toi_df['target'].notna()]
-                    toi_df['dataset_source'] = 'toi'
-                    datasets.append(toi_df)
-                    dataset_info.append(f"TOI: {len(toi_df)} samples")
-            
             if len(datasets) == 0:
                 raise HTTPException(status_code=404, detail="No datasets found for combined training")
             
@@ -542,18 +706,61 @@ async def train_advanced_ensemble(request: TrainingRequest, background_tasks: Ba
             if not os.path.exists(dataset_path):
                 raise HTTPException(status_code=404, detail=f"Dataset not found: {request.dataset}")
             
+            print(f"[INFO] Loading dataset: {request.dataset}")
             df = pd.read_csv(dataset_path, comment='#')
-            df['target'] = df['koi_disposition'].map({'CONFIRMED': 2, 'CANDIDATE': 1, 'FALSE POSITIVE': 0})
+            
+            # Determine which disposition column to use
+            if request.target_column:
+                disposition_col = request.target_column
+                if disposition_col not in df.columns:
+                    raise HTTPException(status_code=400, detail=f"Target column '{disposition_col}' not found in dataset")
+            else:
+                # Auto-detect disposition column
+                disposition_col = None
+                if 'koi_disposition' in df.columns:
+                    disposition_col = 'koi_disposition'
+                elif 'disposition' in df.columns:
+                    disposition_col = 'disposition'
+                else:
+                    raise HTTPException(status_code=400, detail="No disposition column found in dataset. Please specify target_column.")
+            
+            print(f"[INFO] Dataset loaded: {len(df)} samples with target distribution:")
+            print(df[disposition_col].value_counts().to_dict())
+            
+            # Use custom mapping if provided, otherwise use default
+            if request.target_mapping:
+                df['target'] = df[disposition_col].map(request.target_mapping)
+            else:
+                df['target'] = df[disposition_col].map({'CONFIRMED': 2, 'CANDIDATE': 1, 'FALSE POSITIVE': 0})
+            
             df = df[df['target'].notna()]
             df['dataset_source'] = request.dataset.replace('.csv', '')
+            
+            print(f"[INFO] Valid samples after filtering: {len(df)}")
         
         # Get numeric features (same approach as Streamlit)
         numeric_features = df.select_dtypes(include=[np.number]).columns.tolist()
         if 'target' in numeric_features:
             numeric_features.remove('target')
         
-        # Prepare features and target
-        X = df[numeric_features].fillna(0)
+        print(f"[INFO] Using {len(numeric_features)} numeric features")
+        
+        # Prepare features and target (same NaN handling as Streamlit)
+        X = df[numeric_features].copy()
+        
+        # Fill NaN values properly (matching Streamlit logic)
+        for col in X.columns:
+            if X[col].isna().any():
+                median_val = X[col].median()
+                if pd.isna(median_val):
+                    X[col] = X[col].fillna(0)
+                else:
+                    X[col] = X[col].fillna(median_val)
+        
+        # Final check (matching Streamlit)
+        if X.isna().any().any():
+            X = X.fillna(0)
+        
         y = df['target']
         
         # Split data with configurable test size
@@ -633,6 +840,8 @@ async def train_advanced_ensemble(request: TrainingRequest, background_tasks: Ba
         # Create ensemble (same as Streamlit)
         ensemble = VotingClassifier(models, voting='soft')
         
+        print(f"[INFO] Training ensemble with {len(models)} algorithms: {algorithms_used}")
+        
         # Hyperparameter tuning with grid search if enabled
         if request.use_hyperparameter_tuning:
             print("[INFO] Starting hyperparameter tuning with grid search...")
@@ -690,20 +899,33 @@ async def train_advanced_ensemble(request: TrainingRequest, background_tasks: Ba
             # Train the model normally
             ensemble.fit(X_train, y_train)
         
-        # Cross-validation accuracy (same as Streamlit)
-        from sklearn.model_selection import cross_val_score
-        cv_scores = cross_val_score(ensemble, X_train, y_train, cv=3, scoring='accuracy')
-        cv_accuracy = cv_scores.mean()
+        # Evaluate on train and test sets (matching Streamlit)
+        from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
         
-        # Test set evaluation
-        from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-        y_pred = ensemble.predict(X_test)
+        y_pred_train = ensemble.predict(X_train)
+        y_pred_test = ensemble.predict(X_test)
+        
+        train_accuracy = accuracy_score(y_train, y_pred_train)
+        test_accuracy = accuracy_score(y_test, y_pred_test)
+        
+        # Calculate additional metrics (matching Streamlit)
+        precision = precision_score(y_test, y_pred_test, average='weighted', zero_division=0)
+        recall = recall_score(y_test, y_pred_test, average='weighted', zero_division=0)
+        f1 = f1_score(y_test, y_pred_test, average='weighted', zero_division=0)
+        
+        # Get confusion matrix (matching Streamlit)
+        cm = confusion_matrix(y_test, y_pred_test)
+        
+        print(f"[INFO] Training complete - Train Accuracy: {train_accuracy:.2%}, Test Accuracy: {test_accuracy:.2%}")
         
         metrics = {
-            'accuracy': float(accuracy_score(y_test, y_pred)),
-            'precision': float(precision_score(y_test, y_pred, average='weighted', zero_division=0)),
-            'recall': float(recall_score(y_test, y_pred, average='weighted', zero_division=0)),
-            'f1_score': float(f1_score(y_test, y_pred, average='weighted', zero_division=0)),
+            'train_accuracy': float(train_accuracy),
+            'test_accuracy': float(test_accuracy),
+            'accuracy': float(test_accuracy),  # For backward compatibility
+            'precision': float(precision),
+            'recall': float(recall),
+            'f1_score': float(f1),
+            'confusion_matrix': cm.tolist(),
             'train_samples': len(X_train),
             'test_samples': len(X_test),
             'n_features': len(numeric_features)
@@ -716,15 +938,25 @@ async def train_advanced_ensemble(request: TrainingRequest, background_tasks: Ba
         model_path = os.path.join(MODELS_DIR, f"{model_id}.joblib")
         os.makedirs(MODELS_DIR, exist_ok=True)
         
-        # Store metadata (same as Streamlit)
-        ensemble.model_id = model_id
-        ensemble.model_name = request.model_name
-        ensemble.description = request.description
-        ensemble.cv_accuracy = cv_accuracy
+        # Store metadata in model (matching Streamlit exactly)
         ensemble.feature_names = numeric_features
-        ensemble.dataset_summary = {'total_samples': len(X)}
-        ensemble.algorithms_used = algorithms_used
-        ensemble.created_at = datetime.now().isoformat()
+        ensemble.metadata = {
+            'id': model_id,
+            'name': request.model_name,
+            'description': request.description,
+            'created_at': datetime.now().isoformat(),
+            'train_samples': len(X_train),
+            'test_samples': len(X_test),
+            'train_accuracy': float(train_accuracy),
+            'test_accuracy': float(test_accuracy),
+            'precision': float(precision),
+            'recall': float(recall),
+            'f1_score': float(f1),
+            'confusion_matrix': cm.tolist(),
+            'features': numeric_features,
+            'n_features': len(numeric_features),
+            'algorithms': algorithms_used
+        }
         
         joblib.dump(ensemble, model_path)
         
@@ -736,20 +968,23 @@ async def train_advanced_ensemble(request: TrainingRequest, background_tasks: Ba
         else:
             metadata = []
         
+        # Create metadata for JSON file (matching Streamlit structure)
         model_metadata = {
             'id': model_id,
             'name': request.model_name,
             'description': request.description,
-            'created_at': ensemble.created_at,
-            'train_accuracy': cv_accuracy,  # Cross-validation accuracy
-            'test_accuracy': metrics['accuracy'],
-            'precision': metrics['precision'],
-            'recall': metrics['recall'],
-            'f1_score': metrics['f1_score'],
-            'algorithms': algorithms_used,
-            'n_features': len(numeric_features),
+            'created_at': ensemble.metadata['created_at'],
             'train_samples': len(X_train),
             'test_samples': len(X_test),
+            'train_accuracy': float(train_accuracy),
+            'test_accuracy': float(test_accuracy),
+            'precision': float(precision),
+            'recall': float(recall),
+            'f1_score': float(f1),
+            'confusion_matrix': cm.tolist(),
+            'features': numeric_features,
+            'n_features': len(numeric_features),
+            'algorithms': algorithms_used,
             'model_path': model_path
         }
         
@@ -767,11 +1002,11 @@ async def train_advanced_ensemble(request: TrainingRequest, background_tasks: Ba
         
         return TrainingResponse(
             status="completed",
-            message=f"🎯 Ensemble trained successfully! CV Accuracy: {cv_accuracy:.1%}, Test Accuracy: {metrics['accuracy']:.1%}",
+            message=f"✅ Model trained successfully! Train Accuracy: {train_accuracy:.1%}, Test Accuracy: {test_accuracy:.1%}",
             model_id=model_id,
             metrics=metrics,
             algorithms_used=algorithms_used,
-            cv_accuracy=cv_accuracy,
+            cv_accuracy=float(train_accuracy),  # Use train accuracy for consistency
             dataset_summary=dataset_summary
         )
         
@@ -974,6 +1209,113 @@ async def list_models():
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list models: {str(e)}")
+
+@app.options("/models/{model_id}/evaluate")
+@app.get("/models/{model_id}/evaluate")
+async def evaluate_model(model_id: str):
+    """Evaluate a specific model and return detailed metrics"""
+    try:
+        # First try to load the model file
+        model_path = os.path.join(MODELS_DIR, f"{model_id}.joblib")
+        metadata = None
+        
+        if os.path.exists(model_path):
+            try:
+                model = joblib.load(model_path)
+                if hasattr(model, 'metadata'):
+                    metadata = model.metadata
+            except Exception as e:
+                print(f"[WARNING] Failed to load model {model_id}: {e}")
+        
+        # If no model file or metadata, try to get from models_metadata.json
+        if metadata is None:
+            if os.path.exists(MODELS_METADATA_FILE):
+                with open(MODELS_METADATA_FILE, 'r') as f:
+                    models_metadata = json.load(f)
+                
+                # Find the model in metadata
+                model_metadata = next((m for m in models_metadata if m.get('id') == model_id), None)
+                if model_metadata:
+                    metadata = model_metadata
+                else:
+                    raise HTTPException(status_code=404, detail=f"Model {model_id} not found in metadata")
+            else:
+                raise HTTPException(status_code=404, detail=f"Model {model_id} not found and no metadata file available")
+        
+        # Return comprehensive evaluation
+        return {
+            "model_id": model_id,
+            "model_info": {
+                "name": metadata.get('name', 'Unknown'),
+                "description": metadata.get('description', ''),
+                "created_at": metadata.get('created_at', ''),
+                "algorithms": metadata.get('algorithms', []),
+                "n_features": metadata.get('n_features', 0)
+            },
+            "metrics": {
+                "train_accuracy": metadata.get('train_accuracy', 0),
+                "test_accuracy": metadata.get('test_accuracy', 0),
+                "precision": metadata.get('precision', 0),
+                "recall": metadata.get('recall', 0),
+                "f1_score": metadata.get('f1_score', 0)
+            },
+            "confusion_matrix": metadata.get('confusion_matrix', []),
+            "dataset_info": {
+                "train_samples": metadata.get('train_samples', 0),
+                "test_samples": metadata.get('test_samples', 0)
+            },
+            "features": metadata.get('features', [])
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to evaluate model: {str(e)}")
+
+@app.options("/datasets/{dataset_name}/columns")
+@app.get("/datasets/{dataset_name}/columns")
+async def get_dataset_columns(dataset_name: str):
+    """Get column names and sample values from a dataset"""
+    try:
+        # Validate dataset name
+        valid_datasets = ["koi", "k2", "toi"]
+        if dataset_name not in valid_datasets:
+            raise HTTPException(status_code=400, detail=f"Invalid dataset. Must be one of: {valid_datasets}")
+        
+        file_path = os.path.join(DATA_DIR, f"{dataset_name}.csv")
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail=f"Dataset file not found: {file_path}")
+        
+        # Load dataset
+        df = pd.read_csv(file_path, comment='#')
+        
+        # Get columns with their types and sample unique values
+        columns_info = []
+        for col in df.columns:
+            col_info = {
+                "name": col,
+                "type": str(df[col].dtype),
+                "non_null_count": int(df[col].notna().sum()),
+                "null_count": int(df[col].isna().sum())
+            }
+            
+            # Add unique values for categorical columns
+            if df[col].dtype == 'object' or df[col].nunique() < 20:
+                unique_vals = df[col].dropna().unique().tolist()[:10]
+                col_info["sample_values"] = [str(v) for v in unique_vals]
+                col_info["unique_count"] = int(df[col].nunique())
+            
+            columns_info.append(col_info)
+        
+        return {
+            "dataset": dataset_name,
+            "total_rows": len(df),
+            "total_columns": len(df.columns),
+            "columns": columns_info
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get dataset columns: {str(e)}")
 
 @app.options("/feature-correlations")
 @app.get("/feature-correlations")

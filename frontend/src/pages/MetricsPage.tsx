@@ -33,6 +33,7 @@ export default function MetricsPage() {
   const [metrics, setMetrics] = useState<MetricsResponse | null>(null)
   const [correlations, setCorrelations] = useState<any>(null)
   const [models, setModels] = useState<any[]>([])
+  const [selectedModelId, setSelectedModelId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<'overview' | 'correlations' | 'comparison'>('overview')
@@ -42,12 +43,12 @@ export default function MetricsPage() {
     loadModels()
   }, [])
 
-  // Load metrics when overview tab is accessed
+  // Load metrics when overview tab is accessed or model changes
   useEffect(() => {
-    if (activeTab === 'overview' && !metrics && !loading) {
+    if (activeTab === 'overview') {
       loadMetrics()
     }
-  }, [activeTab, metrics, loading])
+  }, [activeTab, selectedModelId])
 
   // Load correlations when correlations tab is accessed
   useEffect(() => {
@@ -60,8 +61,30 @@ export default function MetricsPage() {
     setLoading(true)
     setError(null)
     try {
-      const data = await api.getMetrics()
-      setMetrics(data)
+      let data
+      if (selectedModelId) {
+        // Load metrics for specific model
+        data = await api.evaluateModel(selectedModelId)
+        // Transform to match MetricsResponse format
+        setMetrics({
+          accuracy: data.metrics.test_accuracy,
+          precision: data.metrics.precision,
+          recall: data.metrics.recall,
+          f1_score: data.metrics.f1_score,
+          confusion_matrix: data.confusion_matrix,
+          model_info: {
+            model_type: data.model_info.algorithms?.join(', ') || 'Ensemble',
+            n_features: data.model_info.n_features,
+            n_samples: data.dataset_info.train_samples + data.dataset_info.test_samples,
+            classes: ['FALSE POSITIVE', 'CANDIDATE', 'CONFIRMED']
+          },
+          feature_importances: []
+        })
+      } else {
+        // Load default model metrics
+        data = await api.getMetrics()
+        setMetrics(data)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load metrics')
     } finally {
@@ -127,6 +150,31 @@ export default function MetricsPage() {
       {/* Tab Content */}
       {activeTab === 'overview' && (
         <div className="space-y-6">
+          {/* Model Selector */}
+          {models.length > 0 && (
+            <div className="card">
+              <h3 className="text-lg font-semibold mb-3">Select Model to View Metrics</h3>
+              <select
+                value={selectedModelId || ''}
+                onChange={(e) => setSelectedModelId(e.target.value || null)}
+                className="input-field w-full"
+              >
+                <option value="">Default Model (Production)</option>
+                {models.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.name} - {(model.test_accuracy * 100).toFixed(1)}% accuracy
+                    {model.created_at && ` (${new Date(model.created_at).toLocaleDateString()})`}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-slate-500 mt-2">
+                {selectedModelId 
+                  ? `Viewing metrics for: ${models.find(m => m.id === selectedModelId)?.name || 'Unknown'}`
+                  : 'Viewing metrics for the default production model'}
+              </p>
+            </div>
+          )}
+
           {loading ? (
             <div className="card">
               <div className="text-center py-8">
@@ -147,10 +195,10 @@ export default function MetricsPage() {
               {/* Key Metrics */}
               <div className="grid md:grid-cols-4 gap-4">
                 {[
-                  { label: 'Accuracy', value: metrics.accuracy, icon: TrendingUp },
-                  { label: 'Precision', value: metrics.precision, icon: TrendingUp },
-                  { label: 'Recall', value: metrics.recall, icon: TrendingUp },
-                  { label: 'F1 Score', value: metrics.f1_score, icon: TrendingUp },
+                  { label: 'Accuracy', value: metrics.accuracy, icon: TrendingUp, isPercentage: true },
+                  { label: 'Precision', value: metrics.precision, icon: TrendingUp, isPercentage: true },
+                  { label: 'Recall', value: metrics.recall, icon: TrendingUp, isPercentage: true },
+                  { label: 'F1 Score', value: metrics.f1_score, icon: TrendingUp, isPercentage: false },
                 ].map((metric) => {
                   const Icon = metric.icon
                   return (
@@ -160,7 +208,7 @@ export default function MetricsPage() {
                         <Icon className="w-4 h-4 text-primary-500" />
                       </div>
                       <p className="text-3xl font-bold text-white">
-                        {formatPercentage(metric.value)}
+                        {metric.isPercentage ? formatPercentage(metric.value) : metric.value.toFixed(3)}
                       </p>
                     </div>
                   )
@@ -365,7 +413,7 @@ export default function MetricsPage() {
                         <td className="py-3 px-4">{formatPercentage(model.test_accuracy || model.train_accuracy || 0)}</td>
                         <td className="py-3 px-4">{formatPercentage(model.precision || 0)}</td>
                         <td className="py-3 px-4">{formatPercentage(model.recall || 0)}</td>
-                        <td className="py-3 px-4">{formatPercentage(model.f1_score || 0)}</td>
+                        <td className="py-3 px-4">{(model.f1_score || 0).toFixed(3)}</td>
                         <td className="py-3 px-4">{model.n_features || 'N/A'}</td>
                         <td className="py-3 px-4 text-slate-400">
                           {model.created_at ? new Date(model.created_at).toLocaleDateString() : 'N/A'}
