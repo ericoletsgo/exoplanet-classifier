@@ -201,11 +201,22 @@ def load_model():
     """Load the trained model"""
     global _model_cache
     if _model_cache is None:
+        print(f"[DEBUG] Model path: {MODEL_PATH}")
+        print(f"[DEBUG] Model exists: {os.path.exists(MODEL_PATH)}")
+        print(f"[DEBUG] Current working directory: {os.getcwd()}")
+        print(f"[DEBUG] Files in current dir: {os.listdir('.')}")
+        
         if not os.path.exists(MODEL_PATH):
             raise HTTPException(status_code=404, detail=f"Model file not found: {MODEL_PATH}")
-        print(f"[INFO] Loading model from {MODEL_PATH}")
-        _model_cache = joblib.load(MODEL_PATH)
-        print(f"[INFO] Model loaded: {type(_model_cache).__name__}")
+        
+        try:
+            print(f"[INFO] Loading model from {MODEL_PATH}")
+            _model_cache = joblib.load(MODEL_PATH)
+            print(f"[INFO] Model loaded successfully: {type(_model_cache).__name__}")
+        except Exception as e:
+            print(f"[ERROR] Failed to load model: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Model loading failed: {str(e)}")
+    
     return _model_cache
 
 def get_feature_names(model):
@@ -222,10 +233,18 @@ def get_feature_names(model):
 @app.get("/")
 async def root():
     """Health check endpoint"""
+    model_status = "unknown"
+    try:
+        load_model()
+        model_status = "loaded"
+    except Exception as e:
+        model_status = f"error: {str(e)}"
+    
     return {
         "status": "online",
         "service": "Exoplanet Classifier API",
         "version": "1.0.0",
+        "model_status": model_status,
         "endpoints": ["/predict", "/metrics", "/train", "/datasets", "/features"]
     }
 
