@@ -168,6 +168,29 @@ class APIClient {
     description: string
     test_size?: number
     algorithms?: string[]
+    hyperparameters?: {
+      // Gradient Boosting
+      gb_n_estimators?: number
+      gb_learning_rate?: number
+      gb_max_depth?: number
+      gb_min_samples_split?: number
+      // Random Forest
+      rf_n_estimators?: number
+      rf_max_depth?: number
+      rf_min_samples_split?: number
+      rf_max_features?: string
+      // XGBoost
+      xgb_n_estimators?: number
+      xgb_learning_rate?: number
+      xgb_max_depth?: number
+      xgb_subsample?: number
+      // LightGBM
+      lgb_n_estimators?: number
+      lgb_learning_rate?: number
+      lgb_max_depth?: number
+      lgb_num_leaves?: number
+    }
+    use_hyperparameter_tuning?: boolean
   }) {
     return this.request<{
       status: string

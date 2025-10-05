@@ -170,12 +170,39 @@ class MetricsResponse(BaseModel):
     feature_importances: Optional[List[Dict[str, Any]]] = None
     model_info: Dict[str, Any]
 
+class Hyperparameters(BaseModel):
+    # Gradient Boosting parameters
+    gb_n_estimators: int = Field(default=100, ge=50, le=500, description="Number of boosting stages")
+    gb_learning_rate: float = Field(default=0.1, ge=0.01, le=0.3, description="Learning rate shrinks contribution of each tree")
+    gb_max_depth: int = Field(default=3, ge=1, le=10, description="Maximum depth of individual regression estimators")
+    gb_min_samples_split: int = Field(default=2, ge=2, le=20, description="Minimum number of samples required to split an internal node")
+    
+    # Random Forest parameters
+    rf_n_estimators: int = Field(default=100, ge=50, le=500, description="Number of trees in the forest")
+    rf_max_depth: int = Field(default=10, ge=5, le=20, description="Maximum depth of the tree")
+    rf_min_samples_split: int = Field(default=2, ge=2, le=20, description="Minimum number of samples required to split an internal node")
+    rf_max_features: str = Field(default="sqrt", description="Number of features to consider when looking for the best split")
+    
+    # XGBoost parameters
+    xgb_n_estimators: int = Field(default=100, ge=50, le=500, description="Number of boosting rounds")
+    xgb_learning_rate: float = Field(default=0.05, ge=0.01, le=0.3, description="Boosting learning rate")
+    xgb_max_depth: int = Field(default=6, ge=3, le=10, description="Maximum tree depth for base learners")
+    xgb_subsample: float = Field(default=1.0, ge=0.6, le=1.0, description="Subsample ratio of the training instances")
+    
+    # LightGBM parameters
+    lgb_n_estimators: int = Field(default=100, ge=50, le=500, description="Number of boosting iterations")
+    lgb_learning_rate: float = Field(default=0.05, ge=0.01, le=0.3, description="Boosting learning rate")
+    lgb_max_depth: int = Field(default=-1, ge=-1, le=10, description="Maximum tree depth (-1 means no limit)")
+    lgb_num_leaves: int = Field(default=31, ge=10, le=100, description="Maximum number of leaves in one tree")
+
 class TrainingRequest(BaseModel):
     dataset: str = Field(default="koi.csv", description="Dataset to train on (koi.csv, k2.csv, toi.csv)")
     model_name: str = Field(default="New Model", description="Name for the trained model")
     description: str = Field(default="", description="Description of the model")
     test_size: float = Field(default=0.2, description="Test set size (0.1-0.5)")
     algorithms: List[str] = Field(default=["gradient_boosting", "random_forest", "xgboost", "lightgbm"], description="Algorithms to include in ensemble")
+    hyperparameters: Optional[Hyperparameters] = Field(default=None, description="Algorithm-specific hyperparameters")
+    use_hyperparameter_tuning: bool = Field(default=False, description="Enable hyperparameter tuning with grid search")
 
 class TrainingResponse(BaseModel):
     status: str
@@ -486,25 +513,50 @@ async def train_advanced_ensemble(request: TrainingRequest, background_tasks: Ba
             X, y, test_size=request.test_size, random_state=42, stratify=y
         )
         
-        # Create models based on request (same as Streamlit)
+        # Create models based on request with hyperparameters
         from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier, VotingClassifier
         models = []
         algorithms_used = []
         
+        # Use default hyperparameters if not provided
+        hyperparams = request.hyperparameters or Hyperparameters()
+        
         # Always include basic models
         if 'gradient_boosting' in request.algorithms:
-            models.append(('gradient_boosting', GradientBoostingClassifier(n_estimators=100, random_state=42)))
+            gb_model = GradientBoostingClassifier(
+                n_estimators=hyperparams.gb_n_estimators,
+                learning_rate=hyperparams.gb_learning_rate,
+                max_depth=hyperparams.gb_max_depth,
+                min_samples_split=hyperparams.gb_min_samples_split,
+                random_state=42
+            )
+            models.append(('gradient_boosting', gb_model))
             algorithms_used.append('gradient_boosting')
         
         if 'random_forest' in request.algorithms:
-            models.append(('random_forest', RandomForestClassifier(n_estimators=100, random_state=42)))
+            rf_model = RandomForestClassifier(
+                n_estimators=hyperparams.rf_n_estimators,
+                max_depth=hyperparams.rf_max_depth,
+                min_samples_split=hyperparams.rf_min_samples_split,
+                max_features=hyperparams.rf_max_features,
+                random_state=42
+            )
+            models.append(('random_forest', rf_model))
             algorithms_used.append('random_forest')
         
         # Try XGBoost
         if 'xgboost' in request.algorithms:
             try:
                 import xgboost as xgb
-                models.append(('xgboost', xgb.XGBClassifier(n_estimators=100, random_state=42, eval_metric='logloss')))
+                xgb_model = xgb.XGBClassifier(
+                    n_estimators=hyperparams.xgb_n_estimators,
+                    learning_rate=hyperparams.xgb_learning_rate,
+                    max_depth=hyperparams.xgb_max_depth,
+                    subsample=hyperparams.xgb_subsample,
+                    random_state=42,
+                    eval_metric='logloss'
+                )
+                models.append(('xgboost', xgb_model))
                 algorithms_used.append('xgboost')
             except ImportError:
                 pass  # XGBoost not available
@@ -513,7 +565,15 @@ async def train_advanced_ensemble(request: TrainingRequest, background_tasks: Ba
         if 'lightgbm' in request.algorithms:
             try:
                 import lightgbm as lgb
-                models.append(('lightgbm', lgb.LGBMClassifier(n_estimators=100, random_state=42, verbose=-1)))
+                lgb_model = lgb.LGBMClassifier(
+                    n_estimators=hyperparams.lgb_n_estimators,
+                    learning_rate=hyperparams.lgb_learning_rate,
+                    max_depth=hyperparams.lgb_max_depth,
+                    num_leaves=hyperparams.lgb_num_leaves,
+                    random_state=42,
+                    verbose=-1
+                )
+                models.append(('lightgbm', lgb_model))
                 algorithms_used.append('lightgbm')
             except ImportError:
                 pass  # LightGBM not available
@@ -524,8 +584,62 @@ async def train_advanced_ensemble(request: TrainingRequest, background_tasks: Ba
         # Create ensemble (same as Streamlit)
         ensemble = VotingClassifier(models, voting='soft')
         
-        # Train the model
-        ensemble.fit(X_train, y_train)
+        # Hyperparameter tuning with grid search if enabled
+        if request.use_hyperparameter_tuning:
+            print("[INFO] Starting hyperparameter tuning with grid search...")
+            from sklearn.model_selection import GridSearchCV
+            
+            # Define parameter grid for ensemble tuning
+            param_grid = {
+                'voting': ['soft', 'hard']
+            }
+            
+            # Add individual algorithm tuning if only one algorithm is selected
+            if len(request.algorithms) == 1:
+                algorithm = request.algorithms[0]
+                if algorithm == 'gradient_boosting':
+                    param_grid.update({
+                        'gradient_boosting__learning_rate': [0.05, 0.1, 0.15],
+                        'gradient_boosting__max_depth': [3, 5, 7],
+                        'gradient_boosting__n_estimators': [100, 200]
+                    })
+                elif algorithm == 'random_forest':
+                    param_grid.update({
+                        'random_forest__max_depth': [5, 10, 15],
+                        'random_forest__n_estimators': [100, 200],
+                        'random_forest__max_features': ['sqrt', 'log2']
+                    })
+                elif algorithm == 'xgboost':
+                    param_grid.update({
+                        'xgboost__learning_rate': [0.05, 0.1, 0.15],
+                        'xgboost__max_depth': [4, 6, 8],
+                        'xgboost__n_estimators': [100, 200]
+                    })
+                elif algorithm == 'lightgbm':
+                    param_grid.update({
+                        'lightgbm__learning_rate': [0.05, 0.1, 0.15],
+                        'lightgbm__max_depth': [3, 5, 7],
+                        'lightgbm__num_leaves': [20, 31, 50]
+                    })
+            
+            # Perform grid search with cross-validation
+            grid_search = GridSearchCV(
+                ensemble, 
+                param_grid, 
+                cv=3, 
+                scoring='accuracy', 
+                n_jobs=-1, 
+                verbose=1
+            )
+            
+            grid_search.fit(X_train, y_train)
+            ensemble = grid_search.best_estimator_
+            
+            print(f"[INFO] Best parameters: {grid_search.best_params_}")
+            print(f"[INFO] Best cross-validation score: {grid_search.best_score_:.4f}")
+        else:
+            # Train the model normally
+            ensemble.fit(X_train, y_train)
         
         # Cross-validation accuracy (same as Streamlit)
         from sklearn.model_selection import cross_val_score
