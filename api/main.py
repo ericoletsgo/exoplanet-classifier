@@ -926,7 +926,8 @@ async def get_random_example_from_all_datasets(disposition: Optional[str] = None
             raise HTTPException(status_code=404, detail=f"No examples found for disposition: {disposition}")
         
         # Randomly select a dataset
-        dataset_name, df, _ = np.random.choice(available_datasets, p=[1/len(available_datasets)] * len(available_datasets))
+        selected_index = np.random.choice(len(available_datasets))
+        dataset_name, df, _ = available_datasets[selected_index]
         
         # Get random row from selected dataset
         random_row = df.sample(n=1).iloc[0]
