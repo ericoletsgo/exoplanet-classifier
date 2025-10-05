@@ -1,10 +1,4 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:8000' : '')
-
-// Debug logging
-if (typeof window !== 'undefined') {
-  console.log('API_BASE_URL:', API_BASE_URL)
-  console.log('VITE_API_URL env var:', import.meta.env.VITE_API_URL)
-}
+const API_BASE_URL = '/api'
 
 export interface PredictionRequest {
   features: Record<string, number>
@@ -15,6 +9,14 @@ export interface PredictionResponse {
   confidence: number
   probabilities: Record<string, number>
   prediction_class: number
+}
+
+export interface BatchPredictionRequest {
+  records: Record<string, number>[]
+}
+
+export interface BatchPredictionResponse {
+  predictions: PredictionResponse[]
 }
 
 export interface MetricsResponse {
@@ -55,37 +57,21 @@ export interface FeaturesResponse {
 }
 
 class APIClient {
-  private async request<T>(endpoint: string, options?: RequestInit & { timeout?: number }): Promise<T> {
-    const { timeout = 15000, ...fetchOptions } = options || {}
-    
-    const controller = new AbortController()
-    const timeoutId = timeout ? setTimeout(() => controller.abort(), timeout) : null
-    
-    try {
-      const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-        ...fetchOptions,
-        signal: controller.signal,
-        headers: {
-          'Content-Type': 'application/json',
-          ...fetchOptions?.headers,
-        },
-      })
+  private async request<T>(endpoint: string, options?: RequestInit): Promise<T> {
+    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...options?.headers,
+      },
+    })
 
-      if (timeoutId) clearTimeout(timeoutId)
-
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ detail: 'Unknown error' }))
-        throw new Error(error.detail || `HTTP ${response.status}`)
-      }
-
-      return response.json()
-    } catch (error) {
-      if (timeoutId) clearTimeout(timeoutId)
-      if (error instanceof Error && error.name === 'AbortError') {
-        throw new Error('Request timeout')
-      }
-      throw error
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: 'Unknown error' }))
+      throw new Error(error.detail || `HTTP ${response.status}`)
     }
+
+    return response.json()
   }
 
   async healthCheck() {
@@ -110,8 +96,15 @@ class APIClient {
     })
   }
 
+  async batchPredict(data: BatchPredictionRequest) {
+    return this.request<BatchPredictionResponse>('/batch-predict', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+  }
+
   async getMetrics() {
-    return this.request<MetricsResponse>('/metrics', { timeout: 30000 }) // 30 second timeout for heavy operation
+    return this.request<MetricsResponse>('/metrics')
   }
 
   async getDataset(

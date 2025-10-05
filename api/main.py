@@ -18,24 +18,22 @@ from sklearn.preprocessing import label_binarize
 app = FastAPI(
     title="Exoplanet Classifier API",
     description="REST API for exoplanet classification using machine learning",
-    version="1.0.2"  # Bumped to force new deployment
+    version="1.0.0"
 )
 
 # CORS middleware to allow frontend requests
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins
-    allow_credentials=False,  # Must be False when allow_origins=["*"]
-    allow_methods=["*"],  # Allow all methods
-    allow_headers=["*"],  # Allow all headers
+    allow_origins=["http://localhost:5173", "http://localhost:3000"],  # Vite default port
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
-
-# CORS middleware handles OPTIONS requests automatically
 
 # Constants
 # Get the parent directory (project root) to find model files
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODEL_PATH = os.path.join(BASE_DIR, "properly_trained_model.joblib")
+MODEL_PATH = os.path.join(BASE_DIR, "balanced_model_20251005_115605.joblib")
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 MODELS_METADATA_FILE = os.path.join(BASE_DIR, "models", "models_metadata.json")
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -160,6 +158,12 @@ class PredictionResponse(BaseModel):
     probabilities: Dict[str, float]
     prediction_class: int
 
+class BatchPredictionRequest(BaseModel):
+    records: List[Dict[str, float]] = Field(..., description="List of records for batch prediction")
+
+class BatchPredictionResponse(BaseModel):
+    predictions: List[PredictionResponse]
+
 class MetricsResponse(BaseModel):
     accuracy: float
     precision: float
@@ -190,29 +194,29 @@ class DatasetResponse(BaseModel):
     total_pages: int
 
 # Global model cache
-_model_cache = None
+model = None
 
-def load_model():
-    """Load the trained model"""
-    global _model_cache
-    if _model_cache is None:
-        print(f"[DEBUG] Model path: {MODEL_PATH}")
-        print(f"[DEBUG] Model exists: {os.path.exists(MODEL_PATH)}")
-        print(f"[DEBUG] Current working directory: {os.getcwd()}")
-        print(f"[DEBUG] Files in current dir: {os.listdir('.')}")
-        
-        if not os.path.exists(MODEL_PATH):
-            raise HTTPException(status_code=404, detail=f"Model file not found: {MODEL_PATH}")
-        
-        try:
-            print(f"[INFO] Loading model from {MODEL_PATH}")
-            _model_cache = joblib.load(MODEL_PATH)
-            print(f"[INFO] Model loaded successfully: {type(_model_cache).__name__}")
-        except Exception as e:
-            print(f"[ERROR] Failed to load model: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Model loading failed: {str(e)}")
+@app.on_event("startup")
+def load_model_on_startup():
+    """Load the trained model at application startup"""
+    global model
+    if not os.path.exists(MODEL_PATH):
+        print(f"[ERROR] Model file not found at {MODEL_PATH}")
+        model = None
+        return
     
-    return _model_cache
+    print(f"[INFO] Loading model from {MODEL_PATH}")
+    model = joblib.load(MODEL_PATH)
+    print(f"[INFO] Model loaded: {type(model).__name__}")
+
+def get_model():
+    """Get the loaded model, raising an error if it's not available"""
+    if model is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Model is not loaded. Check server logs for errors."
+        )
+    return model
 
 def get_feature_names(model):
     """Extract feature names from model"""
@@ -228,22 +232,13 @@ def get_feature_names(model):
 @app.get("/")
 async def root():
     """Health check endpoint"""
-    model_status = "unknown"
-    try:
-        load_model()
-        model_status = "loaded"
-    except Exception as e:
-        model_status = f"error: {str(e)}"
-    
     return {
         "status": "online",
         "service": "Exoplanet Classifier API",
         "version": "1.0.0",
-        "model_status": model_status,
         "endpoints": ["/predict", "/metrics", "/train", "/datasets", "/features"]
     }
 
-@app.options("/features")
 @app.get("/features")
 async def get_features():
     """Get list of all features required for prediction with human-readable labels"""
@@ -255,27 +250,22 @@ async def get_features():
         "categories": list(RELEVANT_FEATURES.keys())
     }
 
-@app.options("/predict")
 @app.post("/predict", response_model=PredictionResponse)
 async def predict(request: PredictionRequest):
     """Make a prediction using the trained model"""
     try:
-        model = load_model()
+        model = get_model()
         feature_names = get_feature_names(model)
         
         # Create feature vector in correct order
         feature_vector = []
-        missing_features = []
         
         for feature in feature_names:
-            if feature in request.features:
-                feature_vector.append(request.features[feature])
-            else:
-                feature_vector.append(0.0)  # Default to 0 for missing features
-                missing_features.append(feature)
+            feature_vector.append(request.features.get(feature, 0.0))
         
         # Make prediction
-        X = np.array([feature_vector])
+        import pandas as pd
+        X = pd.DataFrame([feature_vector], columns=feature_names)
         prediction = model.predict(X)[0]
         probabilities = model.predict_proba(X)[0]
         
@@ -300,12 +290,59 @@ async def predict(request: PredictionRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
 
-@app.options("/predict-raw")
+@app.post("/batch-predict", response_model=BatchPredictionResponse)
+async def batch_predict(request: BatchPredictionRequest):
+    """Make predictions for a batch of records - MUCH faster than individual predictions"""
+    try:
+        model = get_model()
+        feature_names = get_feature_names(model)
+
+        # Create feature matrix for the entire batch
+        feature_matrix = []
+        for record in request.records:
+            feature_vector = [record.get(feature, 0.0) for feature in feature_names]
+            feature_matrix.append(feature_vector)
+
+        if not feature_matrix:
+            return BatchPredictionResponse(predictions=[])
+
+        # Make predictions in a single batch (vectorized operation)
+        # Create DataFrame with proper feature names to avoid sklearn warnings
+        import pandas as pd
+        X = pd.DataFrame(feature_matrix, columns=feature_names)
+        predictions = model.predict(X)
+        probabilities = model.predict_proba(X)
+
+        # Map predictions to labels
+        label_map = {0: "FALSE POSITIVE", 1: "CANDIDATE", 2: "CONFIRMED"}
+        results = []
+        for i in range(len(predictions)):
+            pred_class = int(predictions[i])
+            pred_label = label_map.get(pred_class, "UNKNOWN")
+            probs = probabilities[i]
+            prob_dict = {
+                "FALSE POSITIVE": float(probs[0]),
+                "CANDIDATE": float(probs[1]),
+                "CONFIRMED": float(probs[2])
+            }
+            
+            results.append(PredictionResponse(
+                prediction=pred_label,
+                confidence=float(max(probs)),
+                probabilities=prob_dict,
+                prediction_class=pred_class
+            ))
+
+        return BatchPredictionResponse(predictions=results)
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Batch prediction failed: {str(e)}")
+
 @app.post("/predict-raw", response_model=PredictionResponse)
 async def predict_raw(request: dict):
     """Make a prediction using raw dataset row data"""
     try:
-        model = load_model()
+        model = get_model()
         feature_names = get_feature_names(model)
         
         # Extract features from raw row data
@@ -342,12 +379,11 @@ async def predict_raw(request: dict):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Raw prediction failed: {str(e)}")
 
-@app.options("/metrics")
 @app.get("/metrics", response_model=MetricsResponse)
 async def get_metrics():
     """Get model performance metrics on held-out test set"""
     try:
-        model = load_model()
+        model = get_model()
         
         # Get feature names from model
         feature_names = get_feature_names(model)
@@ -451,7 +487,6 @@ async def get_metrics():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get metrics: {str(e)}")
 
-@app.options("/train")
 @app.post("/train", response_model=TrainingResponse)
 async def train_model(request: TrainingRequest, background_tasks: BackgroundTasks):
     """Trigger model training (runs in background)"""
@@ -468,7 +503,6 @@ async def train_model(request: TrainingRequest, background_tasks: BackgroundTask
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Training failed: {str(e)}")
 
-@app.options("/datasets/{dataset_name}")
 @app.get("/datasets/{dataset_name}", response_model=DatasetResponse)
 async def get_dataset(
     dataset_name: str,
@@ -517,7 +551,6 @@ async def get_dataset(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load dataset: {str(e)}")
 
-@app.options("/random-example/{dataset_name}")
 @app.get("/random-example/{dataset_name}")
 async def get_random_example(dataset_name: str, disposition: Optional[str] = None):
     """Get a random example from the dataset for testing predictions"""
@@ -572,7 +605,6 @@ async def get_random_example(dataset_name: str, disposition: Optional[str] = Non
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get random example: {str(e)}")
 
-@app.options("/models")
 @app.get("/models")
 async def list_models():
     """List all available trained models"""
@@ -587,52 +619,6 @@ async def list_models():
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list models: {str(e)}")
-
-# Add static file serving for production
-from fastapi.staticfiles import StaticFiles
-import os
-
-# Serve React build files in production
-if os.path.exists("static"):
-    app.mount("/static", StaticFiles(directory="static"), name="static")
-    
-    # Serve React app for frontend routes only
-    from fastapi.responses import FileResponse
-    
-    # Serve React app for non-conflicting frontend routes
-    @app.get("/batch")
-    async def serve_batch_page():
-        if os.path.exists("static/index.html"):
-            return FileResponse("static/index.html")
-        else:
-            raise HTTPException(status_code=404, detail="Frontend not built")
-    
-    @app.get("/retrain")
-    async def serve_retrain_page():
-        if os.path.exists("static/index.html"):
-            return FileResponse("static/index.html")
-        else:
-            raise HTTPException(status_code=404, detail="Frontend not built")
-    
-    # Catch-all for other frontend routes (React Router will handle routing)
-    @app.get("/{full_path:path}")
-    async def serve_react_app(full_path: str):
-        # Don't serve React for API routes or system routes
-        if (full_path.startswith("api/") or 
-            full_path.startswith("docs") or 
-            full_path.startswith("redoc") or
-            full_path.startswith("static/") or
-            full_path == "openapi.json" or
-            full_path in ["features", "metrics", "predict", "train", "datasets", "models", "random-example"] or
-            full_path.startswith("datasets/") or
-            full_path.startswith("random-example/")):
-            raise HTTPException(status_code=404, detail="Not found")
-        
-        # Serve React app for all other routes
-        if os.path.exists("static/index.html"):
-            return FileResponse("static/index.html")
-        else:
-            raise HTTPException(status_code=404, detail="Frontend not built")
 
 if __name__ == "__main__":
     import uvicorn
