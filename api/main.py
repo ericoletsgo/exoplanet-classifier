@@ -18,22 +18,24 @@ from sklearn.preprocessing import label_binarize
 app = FastAPI(
     title="Exoplanet Classifier API",
     description="REST API for exoplanet classification using machine learning",
-    version="1.0.0"
+    version="1.0.2"  # Bumped to force new deployment
 )
 
 # CORS middleware to allow frontend requests
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],  # Vite default port
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["*"],  # Allow all origins
+    allow_credentials=False,  # Must be False when allow_origins=["*"]
+    allow_methods=["*"],  # Allow all methods
+    allow_headers=["*"],  # Allow all headers
 )
+
+# CORS middleware handles OPTIONS requests automatically
 
 # Constants
 # Get the parent directory (project root) to find model files
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODEL_PATH = os.path.join(BASE_DIR, "balanced_model_20251005_115605.joblib")
+MODEL_PATH = os.path.join(BASE_DIR, "properly_trained_model.joblib")
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 MODELS_METADATA_FILE = os.path.join(BASE_DIR, "models", "models_metadata.json")
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -158,12 +160,6 @@ class PredictionResponse(BaseModel):
     probabilities: Dict[str, float]
     prediction_class: int
 
-class BatchPredictionRequest(BaseModel):
-    records: List[Dict[str, float]] = Field(..., description="List of records for batch prediction")
-
-class BatchPredictionResponse(BaseModel):
-    predictions: List[PredictionResponse]
-
 class MetricsResponse(BaseModel):
     accuracy: float
     precision: float
@@ -194,29 +190,29 @@ class DatasetResponse(BaseModel):
     total_pages: int
 
 # Global model cache
-model = None
+_model_cache = None
 
-@app.on_event("startup")
-def load_model_on_startup():
-    """Load the trained model at application startup"""
-    global model
-    if not os.path.exists(MODEL_PATH):
-        print(f"[ERROR] Model file not found at {MODEL_PATH}")
-        model = None
-        return
+def load_model():
+    """Load the trained model"""
+    global _model_cache
+    if _model_cache is None:
+        print(f"[DEBUG] Model path: {MODEL_PATH}")
+        print(f"[DEBUG] Model exists: {os.path.exists(MODEL_PATH)}")
+        print(f"[DEBUG] Current working directory: {os.getcwd()}")
+        print(f"[DEBUG] Files in current dir: {os.listdir('.')}")
+        
+        if not os.path.exists(MODEL_PATH):
+            raise HTTPException(status_code=404, detail=f"Model file not found: {MODEL_PATH}")
+        
+        try:
+            print(f"[INFO] Loading model from {MODEL_PATH}")
+            _model_cache = joblib.load(MODEL_PATH)
+            print(f"[INFO] Model loaded successfully: {type(_model_cache).__name__}")
+        except Exception as e:
+            print(f"[ERROR] Failed to load model: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Model loading failed: {str(e)}")
     
-    print(f"[INFO] Loading model from {MODEL_PATH}")
-    model = joblib.load(MODEL_PATH)
-    print(f"[INFO] Model loaded: {type(model).__name__}")
-
-def get_model():
-    """Get the loaded model, raising an error if it's not available"""
-    if model is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Model is not loaded. Check server logs for errors."
-        )
-    return model
+    return _model_cache
 
 def get_feature_names(model):
     """Extract feature names from model"""
@@ -232,13 +228,22 @@ def get_feature_names(model):
 @app.get("/")
 async def root():
     """Health check endpoint"""
+    model_status = "unknown"
+    try:
+        load_model()
+        model_status = "loaded"
+    except Exception as e:
+        model_status = f"error: {str(e)}"
+    
     return {
         "status": "online",
         "service": "Exoplanet Classifier API",
         "version": "1.0.0",
+        "model_status": model_status,
         "endpoints": ["/predict", "/metrics", "/train", "/datasets", "/features"]
     }
 
+@app.options("/features")
 @app.get("/features")
 async def get_features():
     """Get list of all features required for prediction with human-readable labels"""
@@ -250,22 +255,27 @@ async def get_features():
         "categories": list(RELEVANT_FEATURES.keys())
     }
 
+@app.options("/predict")
 @app.post("/predict", response_model=PredictionResponse)
 async def predict(request: PredictionRequest):
     """Make a prediction using the trained model"""
     try:
-        model = get_model()
+        model = load_model()
         feature_names = get_feature_names(model)
         
         # Create feature vector in correct order
         feature_vector = []
+        missing_features = []
         
         for feature in feature_names:
-            feature_vector.append(request.features.get(feature, 0.0))
+            if feature in request.features:
+                feature_vector.append(request.features[feature])
+            else:
+                feature_vector.append(0.0)  # Default to 0 for missing features
+                missing_features.append(feature)
         
         # Make prediction
-        import pandas as pd
-        X = pd.DataFrame([feature_vector], columns=feature_names)
+        X = np.array([feature_vector])
         prediction = model.predict(X)[0]
         probabilities = model.predict_proba(X)[0]
         
@@ -290,59 +300,12 @@ async def predict(request: PredictionRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
 
-@app.post("/batch-predict", response_model=BatchPredictionResponse)
-async def batch_predict(request: BatchPredictionRequest):
-    """Make predictions for a batch of records - MUCH faster than individual predictions"""
-    try:
-        model = get_model()
-        feature_names = get_feature_names(model)
-
-        # Create feature matrix for the entire batch
-        feature_matrix = []
-        for record in request.records:
-            feature_vector = [record.get(feature, 0.0) for feature in feature_names]
-            feature_matrix.append(feature_vector)
-
-        if not feature_matrix:
-            return BatchPredictionResponse(predictions=[])
-
-        # Make predictions in a single batch (vectorized operation)
-        # Create DataFrame with proper feature names to avoid sklearn warnings
-        import pandas as pd
-        X = pd.DataFrame(feature_matrix, columns=feature_names)
-        predictions = model.predict(X)
-        probabilities = model.predict_proba(X)
-
-        # Map predictions to labels
-        label_map = {0: "FALSE POSITIVE", 1: "CANDIDATE", 2: "CONFIRMED"}
-        results = []
-        for i in range(len(predictions)):
-            pred_class = int(predictions[i])
-            pred_label = label_map.get(pred_class, "UNKNOWN")
-            probs = probabilities[i]
-            prob_dict = {
-                "FALSE POSITIVE": float(probs[0]),
-                "CANDIDATE": float(probs[1]),
-                "CONFIRMED": float(probs[2])
-            }
-            
-            results.append(PredictionResponse(
-                prediction=pred_label,
-                confidence=float(max(probs)),
-                probabilities=prob_dict,
-                prediction_class=pred_class
-            ))
-
-        return BatchPredictionResponse(predictions=results)
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Batch prediction failed: {str(e)}")
-
+@app.options("/predict-raw")
 @app.post("/predict-raw", response_model=PredictionResponse)
 async def predict_raw(request: dict):
     """Make a prediction using raw dataset row data"""
     try:
-        model = get_model()
+        model = load_model()
         feature_names = get_feature_names(model)
         
         # Extract features from raw row data
@@ -379,11 +342,12 @@ async def predict_raw(request: dict):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Raw prediction failed: {str(e)}")
 
+@app.options("/metrics")
 @app.get("/metrics", response_model=MetricsResponse)
 async def get_metrics():
     """Get model performance metrics on held-out test set"""
     try:
-        model = get_model()
+        model = load_model()
         
         # Get feature names from model
         feature_names = get_feature_names(model)
@@ -487,22 +451,142 @@ async def get_metrics():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get metrics: {str(e)}")
 
+@app.options("/train")
 @app.post("/train", response_model=TrainingResponse)
 async def train_model(request: TrainingRequest, background_tasks: BackgroundTasks):
     """Trigger model training (runs in background)"""
     try:
-        # For now, return a message that training is not implemented in API
-        # In production, you'd use Celery or similar for background tasks
+        # Load the dataset
+        dataset_path = os.path.join(DATA_DIR, request.dataset)
+        if not os.path.exists(dataset_path):
+            raise HTTPException(status_code=404, detail=f"Dataset not found: {request.dataset}")
+        
+        # Load and prepare data
+        df = pd.read_csv(dataset_path, comment='#')
+        df['target'] = df['koi_disposition'].map({'CONFIRMED': 2, 'CANDIDATE': 1, 'FALSE POSITIVE': 0})
+        df = df[df['target'].notna()]
+        
+        # Get feature names from existing model
+        existing_model = load_model()
+        feature_names = get_feature_names(existing_model)
+        
+        # Filter to available features
+        available_features = [f for f in feature_names if f in df.columns]
+        
+        # Prepare features and target
+        X = df[available_features].fillna(0)
+        y = df['target'].astype(int)
+        
+        # Split data
+        from sklearn.model_selection import train_test_split
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42, stratify=y
+        )
+        
+        # Create a simple ensemble model (same as the main model)
+        from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier, VotingClassifier
+        from sklearn.preprocessing import StandardScaler
+        from sklearn.impute import SimpleImputer
+        from sklearn.pipeline import Pipeline
+        
+        # Try to import optional dependencies
+        models = []
+        
+        # Always include basic models
+        models.append(('gradient_boosting', GradientBoostingClassifier(n_estimators=100, random_state=42)))
+        models.append(('random_forest', RandomForestClassifier(n_estimators=100, random_state=42)))
+        
+        # Try XGBoost
+        try:
+            import xgboost as xgb
+            models.append(('xgboost', xgb.XGBClassifier(n_estimators=100, random_state=42, eval_metric='logloss')))
+        except ImportError:
+            pass
+            
+        # Try LightGBM
+        try:
+            import lightgbm as lgb
+            models.append(('lightgbm', lgb.LGBMClassifier(n_estimators=100, random_state=42, verbose=-1)))
+        except ImportError:
+            pass
+        
+        # Create pipeline
+        pipeline = Pipeline([
+            ('preprocess', Pipeline([
+                ('imputer', SimpleImputer(strategy='median')),
+                ('scaler', StandardScaler())
+            ])),
+            ('ensemble', VotingClassifier(models, voting='soft'))
+        ])
+        
+        # Train the model
+        pipeline.fit(X_train, y_train)
+        
+        # Evaluate
+        from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+        y_pred = pipeline.predict(X_test)
+        
+        metrics = {
+            'accuracy': float(accuracy_score(y_test, y_pred)),
+            'precision': float(precision_score(y_test, y_pred, average='weighted', zero_division=0)),
+            'recall': float(recall_score(y_test, y_pred, average='weighted', zero_division=0)),
+            'f1_score': float(f1_score(y_test, y_pred, average='weighted', zero_division=0)),
+            'train_samples': len(X_train),
+            'test_samples': len(X_test),
+            'n_features': len(available_features)
+        }
+        
+        # Generate model ID
+        model_id = f"model_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        
+        # Save model (in production, you'd save to a proper model store)
+        model_path = os.path.join(MODELS_DIR, f"{model_id}.joblib")
+        os.makedirs(MODELS_DIR, exist_ok=True)
+        
+        # Add metadata to model
+        pipeline.model_id = model_id
+        pipeline.model_name = request.model_name
+        pipeline.description = request.description
+        pipeline.metrics = metrics
+        pipeline.feature_names = available_features
+        pipeline.created_at = datetime.now().isoformat()
+        
+        joblib.dump(pipeline, model_path)
+        
+        # Update models metadata
+        metadata_file = os.path.join(MODELS_DIR, "models_metadata.json")
+        if os.path.exists(metadata_file):
+            with open(metadata_file, 'r') as f:
+                metadata = json.load(f)
+        else:
+            metadata = []
+        
+        model_metadata = {
+            'id': model_id,
+            'name': request.model_name,
+            'description': request.description,
+            'created_at': pipeline.created_at,
+            'metrics': metrics,
+            'feature_names': available_features,
+            'model_path': model_path
+        }
+        
+        metadata.append(model_metadata)
+        
+        with open(metadata_file, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        
         return TrainingResponse(
-            status="not_implemented",
-            message="Training endpoint is not yet implemented. Please use the Streamlit interface or training scripts.",
-            model_id=None,
-            metrics=None
+            status="completed",
+            message=f"Model trained successfully with {metrics['accuracy']:.1%} accuracy",
+            model_id=model_id,
+            metrics=metrics
         )
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Training failed: {str(e)}")
 
+@app.options("/datasets/{dataset_name}")
 @app.get("/datasets/{dataset_name}", response_model=DatasetResponse)
 async def get_dataset(
     dataset_name: str,
@@ -551,6 +635,7 @@ async def get_dataset(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load dataset: {str(e)}")
 
+@app.options("/random-example/{dataset_name}")
 @app.get("/random-example/{dataset_name}")
 async def get_random_example(dataset_name: str, disposition: Optional[str] = None):
     """Get a random example from the dataset for testing predictions"""
@@ -605,6 +690,7 @@ async def get_random_example(dataset_name: str, disposition: Optional[str] = Non
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get random example: {str(e)}")
 
+@app.options("/models")
 @app.get("/models")
 async def list_models():
     """List all available trained models"""
@@ -619,6 +705,92 @@ async def list_models():
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list models: {str(e)}")
+
+@app.options("/feature-correlations")
+@app.get("/feature-correlations")
+async def get_feature_correlations():
+    """Get feature correlation matrix for visualization"""
+    try:
+        # Load a sample of the dataset for correlation analysis
+        koi_path = os.path.join(DATA_DIR, "koi.csv")
+        if not os.path.exists(koi_path):
+            raise HTTPException(status_code=404, detail="Dataset not found")
+        
+        # Load a sample of the data
+        df = pd.read_csv(koi_path, comment='#')
+        
+        # Get the relevant features used by the model
+        model = load_model()
+        feature_names = get_feature_names(model)
+        
+        # Filter to only features that exist in the dataset
+        available_features = [f for f in feature_names if f in df.columns]
+        
+        # Take a sample for performance (correlation computation can be expensive)
+        sample_size = min(5000, len(df))
+        df_sample = df[available_features].sample(n=sample_size, random_state=42)
+        
+        # Calculate correlation matrix
+        correlation_matrix = df_sample.corr()
+        
+        # Convert to format suitable for frontend
+        correlations = {
+            "features": list(correlation_matrix.columns),
+            "matrix": correlation_matrix.values.tolist(),
+            "sample_size": sample_size,
+            "total_features": len(available_features)
+        }
+        
+        return correlations
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to calculate correlations: {str(e)}")
+
+# Add static file serving for production
+from fastapi.staticfiles import StaticFiles
+import os
+
+# Serve React build files in production
+if os.path.exists("static"):
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+    
+    # Serve React app for frontend routes only
+    from fastapi.responses import FileResponse
+    
+    # Serve React app for non-conflicting frontend routes
+    @app.get("/batch")
+    async def serve_batch_page():
+        if os.path.exists("static/index.html"):
+            return FileResponse("static/index.html")
+        else:
+            raise HTTPException(status_code=404, detail="Frontend not built")
+    
+    @app.get("/retrain")
+    async def serve_retrain_page():
+        if os.path.exists("static/index.html"):
+            return FileResponse("static/index.html")
+        else:
+            raise HTTPException(status_code=404, detail="Frontend not built")
+    
+    # Catch-all for other frontend routes (React Router will handle routing)
+    @app.get("/{full_path:path}")
+    async def serve_react_app(full_path: str):
+        # Don't serve React for API routes or system routes
+        if (full_path.startswith("api/") or 
+            full_path.startswith("docs") or 
+            full_path.startswith("redoc") or
+            full_path.startswith("static/") or
+            full_path == "openapi.json" or
+            full_path in ["features", "metrics", "predict", "train", "datasets", "models", "random-example"] or
+            full_path.startswith("datasets/") or
+            full_path.startswith("random-example/")):
+            raise HTTPException(status_code=404, detail="Not found")
+        
+        # Serve React app for all other routes
+        if os.path.exists("static/index.html"):
+            return FileResponse("static/index.html")
+        else:
+            raise HTTPException(status_code=404, detail="Frontend not built")
 
 if __name__ == "__main__":
     import uvicorn

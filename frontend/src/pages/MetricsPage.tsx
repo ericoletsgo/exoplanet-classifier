@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { BarChart3, Loader2, AlertCircle, TrendingUp } from 'lucide-react'
+import { BarChart3, Loader2, AlertCircle, TrendingUp, Grid3X3, GitCompare } from 'lucide-react'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -13,6 +13,7 @@ import {
   LineElement,
 } from 'chart.js'
 import { Bar, Line } from 'react-chartjs-2'
+import HeatmapGrid from 'react-heatmap-grid'
 import { api, type MetricsResponse } from '../lib/api'
 import { formatPercentage, formatNumber } from '../lib/utils'
 
@@ -30,11 +31,16 @@ ChartJS.register(
 
 export default function MetricsPage() {
   const [metrics, setMetrics] = useState<MetricsResponse | null>(null)
+  const [correlations, setCorrelations] = useState<any>(null)
+  const [models, setModels] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState<'overview' | 'correlations' | 'comparison'>('overview')
 
   useEffect(() => {
     loadMetrics()
+    loadCorrelations()
+    loadModels()
   }, [])
 
   const loadMetrics = async () => {
@@ -47,6 +53,24 @@ export default function MetricsPage() {
       setError(err instanceof Error ? err.message : 'Failed to load metrics')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const loadCorrelations = async () => {
+    try {
+      const data = await api.getFeatureCorrelations()
+      setCorrelations(data)
+    } catch (err) {
+      console.error('Failed to load correlations:', err)
+    }
+  }
+
+  const loadModels = async () => {
+    try {
+      const data = await api.listModels()
+      setModels(data.models || [])
+    } catch (err) {
+      console.error('Failed to load models:', err)
     }
   }
 
@@ -227,10 +251,41 @@ export default function MetricsPage() {
       <div>
         <h1 className="text-3xl font-bold flex items-center gap-3">
           <BarChart3 className="w-8 h-8 text-primary-500" />
-          Model Metrics
+          Model Metrics & Analytics
         </h1>
-        <p className="text-slate-400 mt-2">Performance analysis and feature importance</p>
+        <p className="text-slate-400 mt-2">Performance analysis, feature correlations, and model comparison</p>
       </div>
+
+      {/* Tab Navigation */}
+      <div className="border-b border-slate-700">
+        <nav className="flex space-x-8">
+          {[
+            { id: 'overview', label: 'Overview', icon: BarChart3 },
+            { id: 'correlations', label: 'Feature Correlations', icon: Grid3X3 },
+            { id: 'comparison', label: 'Model Comparison', icon: GitCompare },
+          ].map((tab) => {
+            const Icon = tab.icon
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id as any)}
+                className={`flex items-center gap-2 py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                  activeTab === tab.id
+                    ? 'border-primary-500 text-primary-400'
+                    : 'border-transparent text-slate-400 hover:text-slate-300 hover:border-slate-600'
+                }`}
+              >
+                <Icon className="w-4 h-4" />
+                {tab.label}
+              </button>
+            )
+          })}
+        </nav>
+      </div>
+
+      {/* Tab Content */}
+      {activeTab === 'overview' && (
+        <>
 
       {/* Key Metrics */}
       <div className="grid md:grid-cols-4 gap-4">
@@ -308,6 +363,94 @@ export default function MetricsPage() {
                 indexAxis: 'y' as const,
               }}
             />
+          </div>
+        </div>
+      )}
+        </>
+      )}
+
+      {/* Feature Correlations Tab */}
+      {activeTab === 'correlations' && (
+        <div className="space-y-6">
+          <div className="card">
+            <h3 className="text-xl font-semibold mb-4">Feature Correlation Matrix</h3>
+            {correlations ? (
+              <>
+                <p className="text-sm text-slate-400 mb-4">
+                  Correlation analysis based on {correlations.sample_size.toLocaleString()} samples from the dataset.
+                  Darker colors indicate stronger correlations.
+                </p>
+                <div className="overflow-x-auto">
+                  <div className="min-w-[800px]">
+                    <HeatmapGrid
+                      data={correlations.matrix}
+                      xLabels={correlations.features.map(f => f.replace('koi_', '').replace('_', ' '))}
+                      yLabels={correlations.features.map(f => f.replace('koi_', '').replace('_', ' '))}
+                      cellStyle={(background, value, min, max, data, x, y) => ({
+                        background: `rgba(59, 130, 246, ${Math.abs(value)})`,
+                        fontSize: '10px',
+                        color: '#fff',
+                      })}
+                      cellHeight="20px"
+                      xLabelWidth="120px"
+                      yLabelWidth="120px"
+                    />
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="flex items-center justify-center h-64">
+                <Loader2 className="w-8 h-8 animate-spin text-primary-500" />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Model Comparison Tab */}
+      {activeTab === 'comparison' && (
+        <div className="space-y-6">
+          <div className="card">
+            <h3 className="text-xl font-semibold mb-4">Model Comparison</h3>
+            {models.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-700">
+                      <th className="text-left py-3 px-4">Model</th>
+                      <th className="text-left py-3 px-4">Accuracy</th>
+                      <th className="text-left py-3 px-4">Precision</th>
+                      <th className="text-left py-3 px-4">Recall</th>
+                      <th className="text-left py-3 px-4">F1 Score</th>
+                      <th className="text-left py-3 px-4">Features</th>
+                      <th className="text-left py-3 px-4">Created</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {models.map((model, idx) => (
+                      <tr key={idx} className="border-b border-slate-800 hover:bg-slate-800/50">
+                        <td className="py-3 px-4 font-medium">{model.name || `Model ${idx + 1}`}</td>
+                        <td className="py-3 px-4">{formatPercentage(model.test_accuracy || model.train_accuracy || 0)}</td>
+                        <td className="py-3 px-4">{formatPercentage(model.precision || 0)}</td>
+                        <td className="py-3 px-4">{formatPercentage(model.recall || 0)}</td>
+                        <td className="py-3 px-4">{formatPercentage(model.f1_score || 0)}</td>
+                        <td className="py-3 px-4">{model.n_features || 'N/A'}</td>
+                        <td className="py-3 px-4 text-slate-400">
+                          {model.created_at ? new Date(model.created_at).toLocaleDateString() : 'N/A'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="text-center py-8">
+                <p className="text-slate-400">No additional models found. Only the main production model is available.</p>
+                <p className="text-sm text-slate-500 mt-2">
+                  Train new models using the Model Retraining page to see comparisons here.
+                </p>
+              </div>
+            )}
           </div>
         </div>
       )}
