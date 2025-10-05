@@ -81,6 +81,13 @@ class APIClient {
     })
   }
 
+  async predictRaw(rawRowData: Record<string, any>) {
+    return this.request<PredictionResponse>('/predict-raw', {
+      method: 'POST',
+      body: JSON.stringify(rawRowData),
+    })
+  }
+
   async getMetrics() {
     return this.request<MetricsResponse>('/metrics')
   }
@@ -103,6 +110,25 @@ class APIClient {
 
   async listModels() {
     return this.request<{ models: any[] }>('/models')
+  }
+
+  async getRandomExample(datasetName: string, disposition?: string) {
+    const params = new URLSearchParams()
+    if (disposition) {
+      params.append('disposition', disposition)
+    }
+    const queryString = params.toString()
+    const url = `/random-example/${datasetName}${queryString ? `?${queryString}` : ''}`
+    return this.request<{
+      features: Record<string, number>
+      metadata: {
+        row_index: number
+        koi_name: string
+        expected_disposition: string
+        dataset: string
+      }
+      raw_row: Record<string, any>
+    }>(url)
   }
 }
 

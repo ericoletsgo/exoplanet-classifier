@@ -277,6 +277,47 @@ async def predict(request: PredictionRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
 
+@app.post("/predict-raw", response_model=PredictionResponse)
+async def predict_raw(request: dict):
+    """Make a prediction using raw dataset row data"""
+    try:
+        model = load_model()
+        feature_names = get_feature_names(model)
+        
+        # Extract features from raw row data
+        feature_vector = []
+        for feature in feature_names:
+            if feature in request and pd.notna(request[feature]):
+                feature_vector.append(float(request[feature]))
+            else:
+                feature_vector.append(0.0)
+        
+        # Make prediction
+        X = np.array([feature_vector])
+        prediction = model.predict(X)[0]
+        probabilities = model.predict_proba(X)[0]
+        
+        # Map prediction to label
+        label_map = {0: "FALSE POSITIVE", 1: "CANDIDATE", 2: "CONFIRMED"}
+        prediction_label = label_map.get(int(prediction), "UNKNOWN")
+        
+        # Create probability dict
+        prob_dict = {
+            "FALSE POSITIVE": float(probabilities[0]),
+            "CANDIDATE": float(probabilities[1]),
+            "CONFIRMED": float(probabilities[2])
+        }
+        
+        return PredictionResponse(
+            prediction=prediction_label,
+            confidence=float(max(probabilities)),
+            probabilities=prob_dict,
+            prediction_class=int(prediction)
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Raw prediction failed: {str(e)}")
+
 @app.get("/metrics", response_model=MetricsResponse)
 async def get_metrics():
     """Get model performance metrics on held-out test set"""
@@ -448,6 +489,60 @@ async def get_dataset(
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load dataset: {str(e)}")
+
+@app.get("/random-example/{dataset_name}")
+async def get_random_example(dataset_name: str, disposition: Optional[str] = None):
+    """Get a random example from the dataset for testing predictions"""
+    try:
+        # Validate dataset name
+        valid_datasets = ["koi", "k2", "toi"]
+        if dataset_name not in valid_datasets:
+            raise HTTPException(status_code=400, detail=f"Invalid dataset. Must be one of: {valid_datasets}")
+        
+        file_path = os.path.join(DATA_DIR, f"{dataset_name}.csv")
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail=f"Dataset file not found: {file_path}")
+        
+        # Load dataset
+        df = pd.read_csv(file_path, comment='#')
+        
+        # Filter by disposition if specified
+        if disposition and 'koi_disposition' in df.columns:
+            df = df[df['koi_disposition'] == disposition.upper()]
+        
+        if len(df) == 0:
+            raise HTTPException(status_code=404, detail=f"No examples found for disposition: {disposition}")
+        
+        # Get random row
+        random_row = df.sample(n=1).iloc[0]
+        
+        # Extract key features for the frontend
+        # We'll use the actual row data for accurate predictions
+        feature_names = get_all_relevant_features()
+        features = {}
+        
+        for feature in feature_names:
+            if feature in random_row and pd.notna(random_row[feature]):
+                features[feature] = float(random_row[feature])
+            else:
+                features[feature] = 0.0
+        
+        # Get additional metadata
+        metadata = {
+            'row_index': int(random_row.name),
+            'koi_name': str(random_row.get('kepoi_name', 'Unknown')),
+            'expected_disposition': str(random_row.get('koi_disposition', 'Unknown')),
+            'dataset': dataset_name
+        }
+        
+        return {
+            'features': features,
+            'metadata': metadata,
+            'raw_row': random_row.replace({np.nan: None}).to_dict()
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get random example: {str(e)}")
 
 @app.get("/models")
 async def list_models():
