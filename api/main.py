@@ -24,7 +24,14 @@ app = FastAPI(
 # CORS middleware to allow frontend requests
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],  # Vite default port
+    allow_origins=[
+        "http://localhost:5173", 
+        "http://localhost:3000",
+        "https://*.vercel.app",  # Allow all Vercel deployments
+        "https://*.onrender.com",  # Allow all Render deployments
+        "https://*.railway.app",  # Allow all Railway deployments
+        "*"  # Allow all origins for production (you can restrict this later)
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -194,11 +201,22 @@ def load_model():
     """Load the trained model"""
     global _model_cache
     if _model_cache is None:
+        print(f"[DEBUG] Model path: {MODEL_PATH}")
+        print(f"[DEBUG] Model exists: {os.path.exists(MODEL_PATH)}")
+        print(f"[DEBUG] Current working directory: {os.getcwd()}")
+        print(f"[DEBUG] Files in current dir: {os.listdir('.')}")
+        
         if not os.path.exists(MODEL_PATH):
             raise HTTPException(status_code=404, detail=f"Model file not found: {MODEL_PATH}")
-        print(f"[INFO] Loading model from {MODEL_PATH}")
-        _model_cache = joblib.load(MODEL_PATH)
-        print(f"[INFO] Model loaded: {type(_model_cache).__name__}")
+        
+        try:
+            print(f"[INFO] Loading model from {MODEL_PATH}")
+            _model_cache = joblib.load(MODEL_PATH)
+            print(f"[INFO] Model loaded successfully: {type(_model_cache).__name__}")
+        except Exception as e:
+            print(f"[ERROR] Failed to load model: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Model loading failed: {str(e)}")
+    
     return _model_cache
 
 def get_feature_names(model):
@@ -215,10 +233,18 @@ def get_feature_names(model):
 @app.get("/")
 async def root():
     """Health check endpoint"""
+    model_status = "unknown"
+    try:
+        load_model()
+        model_status = "loaded"
+    except Exception as e:
+        model_status = f"error: {str(e)}"
+    
     return {
         "status": "online",
         "service": "Exoplanet Classifier API",
         "version": "1.0.0",
+        "model_status": model_status,
         "endpoints": ["/predict", "/metrics", "/train", "/datasets", "/features"]
     }
 
@@ -558,6 +584,29 @@ async def list_models():
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list models: {str(e)}")
+
+# Add static file serving for production
+from fastapi.staticfiles import StaticFiles
+import os
+
+# Serve React build files in production
+if os.path.exists("static"):
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+    
+    # Serve React app for all non-API routes
+    from fastapi.responses import FileResponse
+    
+    @app.get("/{full_path:path}")
+    async def serve_react_app(full_path: str):
+        # Don't serve React for API routes
+        if full_path.startswith("api/") or full_path.startswith("docs") or full_path.startswith("redoc"):
+            raise HTTPException(status_code=404, detail="Not found")
+        
+        # Serve index.html for all other routes (React Router)
+        if os.path.exists("static/index.html"):
+            return FileResponse("static/index.html")
+        else:
+            raise HTTPException(status_code=404, detail="Frontend not built")
 
 if __name__ == "__main__":
     import uvicorn
