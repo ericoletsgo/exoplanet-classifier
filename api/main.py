@@ -174,12 +174,17 @@ class TrainingRequest(BaseModel):
     dataset: str = Field(default="koi.csv", description="Dataset to train on (koi.csv, k2.csv, toi.csv)")
     model_name: str = Field(default="New Model", description="Name for the trained model")
     description: str = Field(default="", description="Description of the model")
+    test_size: float = Field(default=0.2, description="Test set size (0.1-0.5)")
+    algorithms: List[str] = Field(default=["gradient_boosting", "random_forest", "xgboost", "lightgbm"], description="Algorithms to include in ensemble")
 
 class TrainingResponse(BaseModel):
     status: str
     message: str
     model_id: Optional[str] = None
     metrics: Optional[Dict[str, Any]] = None
+    algorithms_used: Optional[List[str]] = None
+    cv_accuracy: Optional[float] = None
+    dataset_summary: Optional[Dict[str, Any]] = None
 
 class DatasetResponse(BaseModel):
     total_rows: int
@@ -453,78 +458,83 @@ async def get_metrics():
 
 @app.options("/train")
 @app.post("/train", response_model=TrainingResponse)
-async def train_model(request: TrainingRequest, background_tasks: BackgroundTasks):
-    """Trigger model training (runs in background)"""
+async def train_advanced_ensemble(request: TrainingRequest, background_tasks: BackgroundTasks):
+    """Advanced ensemble training matching Streamlit functionality"""
     try:
         # Load the dataset
         dataset_path = os.path.join(DATA_DIR, request.dataset)
         if not os.path.exists(dataset_path):
             raise HTTPException(status_code=404, detail=f"Dataset not found: {request.dataset}")
         
-        # Load and prepare data
+        # Load and prepare data (same as Streamlit)
         df = pd.read_csv(dataset_path, comment='#')
         df['target'] = df['koi_disposition'].map({'CONFIRMED': 2, 'CANDIDATE': 1, 'FALSE POSITIVE': 0})
         df = df[df['target'].notna()]
         
-        # Get feature names from existing model
-        existing_model = load_model()
-        feature_names = get_feature_names(existing_model)
-        
-        # Filter to available features
-        available_features = [f for f in feature_names if f in df.columns]
+        # Get numeric features (same approach as Streamlit)
+        numeric_features = df.select_dtypes(include=[np.number]).columns.tolist()
+        if 'target' in numeric_features:
+            numeric_features.remove('target')
         
         # Prepare features and target
-        X = df[available_features].fillna(0)
-        y = df['target'].astype(int)
+        X = df[numeric_features].fillna(0)
+        y = df['target']
         
-        # Split data
+        # Split data with configurable test size
         from sklearn.model_selection import train_test_split
         X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42, stratify=y
+            X, y, test_size=request.test_size, random_state=42, stratify=y
         )
         
-        # Create a simple ensemble model (same as the main model)
+        # Create models based on request (same as Streamlit)
         from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier, VotingClassifier
-        from sklearn.preprocessing import StandardScaler
-        from sklearn.impute import SimpleImputer
-        from sklearn.pipeline import Pipeline
-        
-        # Try to import optional dependencies
         models = []
+        algorithms_used = []
         
         # Always include basic models
-        models.append(('gradient_boosting', GradientBoostingClassifier(n_estimators=100, random_state=42)))
-        models.append(('random_forest', RandomForestClassifier(n_estimators=100, random_state=42)))
+        if 'gradient_boosting' in request.algorithms:
+            models.append(('gradient_boosting', GradientBoostingClassifier(n_estimators=100, random_state=42)))
+            algorithms_used.append('gradient_boosting')
+        
+        if 'random_forest' in request.algorithms:
+            models.append(('random_forest', RandomForestClassifier(n_estimators=100, random_state=42)))
+            algorithms_used.append('random_forest')
         
         # Try XGBoost
-        try:
-            import xgboost as xgb
-            models.append(('xgboost', xgb.XGBClassifier(n_estimators=100, random_state=42, eval_metric='logloss')))
-        except ImportError:
-            pass
-            
+        if 'xgboost' in request.algorithms:
+            try:
+                import xgboost as xgb
+                models.append(('xgboost', xgb.XGBClassifier(n_estimators=100, random_state=42, eval_metric='logloss')))
+                algorithms_used.append('xgboost')
+            except ImportError:
+                pass  # XGBoost not available
+                
         # Try LightGBM
-        try:
-            import lightgbm as lgb
-            models.append(('lightgbm', lgb.LGBMClassifier(n_estimators=100, random_state=42, verbose=-1)))
-        except ImportError:
-            pass
+        if 'lightgbm' in request.algorithms:
+            try:
+                import lightgbm as lgb
+                models.append(('lightgbm', lgb.LGBMClassifier(n_estimators=100, random_state=42, verbose=-1)))
+                algorithms_used.append('lightgbm')
+            except ImportError:
+                pass  # LightGBM not available
         
-        # Create pipeline
-        pipeline = Pipeline([
-            ('preprocess', Pipeline([
-                ('imputer', SimpleImputer(strategy='median')),
-                ('scaler', StandardScaler())
-            ])),
-            ('ensemble', VotingClassifier(models, voting='soft'))
-        ])
+        if len(models) == 0:
+            raise HTTPException(status_code=400, detail="No algorithms could be loaded")
+        
+        # Create ensemble (same as Streamlit)
+        ensemble = VotingClassifier(models, voting='soft')
         
         # Train the model
-        pipeline.fit(X_train, y_train)
+        ensemble.fit(X_train, y_train)
         
-        # Evaluate
+        # Cross-validation accuracy (same as Streamlit)
+        from sklearn.model_selection import cross_val_score
+        cv_scores = cross_val_score(ensemble, X_train, y_train, cv=3, scoring='accuracy')
+        cv_accuracy = cv_scores.mean()
+        
+        # Test set evaluation
         from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-        y_pred = pipeline.predict(X_test)
+        y_pred = ensemble.predict(X_test)
         
         metrics = {
             'accuracy': float(accuracy_score(y_test, y_pred)),
@@ -533,25 +543,27 @@ async def train_model(request: TrainingRequest, background_tasks: BackgroundTask
             'f1_score': float(f1_score(y_test, y_pred, average='weighted', zero_division=0)),
             'train_samples': len(X_train),
             'test_samples': len(X_test),
-            'n_features': len(available_features)
+            'n_features': len(numeric_features)
         }
         
         # Generate model ID
-        model_id = f"model_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        model_id = f"advanced_ensemble_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
         # Save model (in production, you'd save to a proper model store)
         model_path = os.path.join(MODELS_DIR, f"{model_id}.joblib")
         os.makedirs(MODELS_DIR, exist_ok=True)
         
-        # Add metadata to model
-        pipeline.model_id = model_id
-        pipeline.model_name = request.model_name
-        pipeline.description = request.description
-        pipeline.metrics = metrics
-        pipeline.feature_names = available_features
-        pipeline.created_at = datetime.now().isoformat()
+        # Store metadata (same as Streamlit)
+        ensemble.model_id = model_id
+        ensemble.model_name = request.model_name
+        ensemble.description = request.description
+        ensemble.cv_accuracy = cv_accuracy
+        ensemble.feature_names = numeric_features
+        ensemble.dataset_summary = {'total_samples': len(X)}
+        ensemble.algorithms_used = algorithms_used
+        ensemble.created_at = datetime.now().isoformat()
         
-        joblib.dump(pipeline, model_path)
+        joblib.dump(ensemble, model_path)
         
         # Update models metadata
         metadata_file = os.path.join(MODELS_DIR, "models_metadata.json")
@@ -565,9 +577,16 @@ async def train_model(request: TrainingRequest, background_tasks: BackgroundTask
             'id': model_id,
             'name': request.model_name,
             'description': request.description,
-            'created_at': pipeline.created_at,
-            'metrics': metrics,
-            'feature_names': available_features,
+            'created_at': ensemble.created_at,
+            'train_accuracy': cv_accuracy,  # Cross-validation accuracy
+            'test_accuracy': metrics['accuracy'],
+            'precision': metrics['precision'],
+            'recall': metrics['recall'],
+            'f1_score': metrics['f1_score'],
+            'algorithms': algorithms_used,
+            'n_features': len(numeric_features),
+            'train_samples': len(X_train),
+            'test_samples': len(X_test),
             'model_path': model_path
         }
         
@@ -578,9 +597,12 @@ async def train_model(request: TrainingRequest, background_tasks: BackgroundTask
         
         return TrainingResponse(
             status="completed",
-            message=f"Model trained successfully with {metrics['accuracy']:.1%} accuracy",
+            message=f"🎯 Ensemble trained successfully! CV Accuracy: {cv_accuracy:.1%}, Test Accuracy: {metrics['accuracy']:.1%}",
             model_id=model_id,
-            metrics=metrics
+            metrics=metrics,
+            algorithms_used=algorithms_used,
+            cv_accuracy=cv_accuracy,
+            dataset_summary={'total_samples': len(X), 'features': len(numeric_features)}
         )
         
     except Exception as e:
@@ -745,6 +767,37 @@ async def get_feature_correlations():
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to calculate correlations: {str(e)}")
+
+@app.options("/algorithms")
+@app.get("/algorithms")
+async def get_available_algorithms():
+    """Check which algorithms are available for training"""
+    algorithms = {
+        "gradient_boosting": True,  # Always available
+        "random_forest": True,      # Always available
+        "xgboost": False,
+        "lightgbm": False
+    }
+    
+    # Check XGBoost availability
+    try:
+        import xgboost as xgb
+        algorithms["xgboost"] = True
+    except ImportError:
+        pass
+    
+    # Check LightGBM availability
+    try:
+        import lightgbm as lgb
+        algorithms["lightgbm"] = True
+    except ImportError:
+        pass
+    
+    return {
+        "algorithms": algorithms,
+        "available_count": sum(algorithms.values()),
+        "total_count": len(algorithms)
+    }
 
 # Add static file serving for production
 from fastapi.staticfiles import StaticFiles

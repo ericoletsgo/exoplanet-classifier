@@ -162,17 +162,34 @@ class APIClient {
     }>('/feature-correlations')
   }
 
-  async trainModel(data: { dataset: string; model_name: string; description: string }) {
+  async trainModel(data: { 
+    dataset: string
+    model_name: string
+    description: string
+    test_size?: number
+    algorithms?: string[]
+  }) {
     return this.request<{
       status: string
       message: string
       model_id?: string
       metrics?: Record<string, any>
+      algorithms_used?: string[]
+      cv_accuracy?: number
+      dataset_summary?: Record<string, any>
     }>('/train', {
       method: 'POST',
       body: JSON.stringify(data),
       timeout: 120000 // 2 minute timeout for training
     })
+  }
+
+  async getAvailableAlgorithms() {
+    return this.request<{
+      algorithms: Record<string, boolean>
+      available_count: number
+      total_count: number
+    }>('/algorithms')
   }
 }
 

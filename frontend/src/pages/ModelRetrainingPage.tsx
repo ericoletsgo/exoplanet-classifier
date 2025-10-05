@@ -23,6 +23,7 @@ interface ModelMetadata {
 export default function ModelRetrainingPage() {
   const [activeTab, setActiveTab] = useState<'train' | 'evaluations' | 'management'>('train')
   const [models, setModels] = useState<ModelMetadata[]>([])
+  const [availableAlgorithms, setAvailableAlgorithms] = useState<Record<string, boolean>>({})
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   
@@ -30,11 +31,14 @@ export default function ModelRetrainingPage() {
   const [modelName, setModelName] = useState('')
   const [testSize, setTestSize] = useState(20)
   const [description, setDescription] = useState('')
+  const [selectedDataset, setSelectedDataset] = useState('koi.csv')
+  const [selectedAlgorithms, setSelectedAlgorithms] = useState<string[]>(['gradient_boosting', 'random_forest', 'xgboost', 'lightgbm'])
   const [uploadedFile, setUploadedFile] = useState<File | null>(null)
   const [uploadProgress, setUploadProgress] = useState<string>('')
 
   useEffect(() => {
     loadModels()
+    loadAvailableAlgorithms()
   }, [])
 
   const loadModels = async () => {
@@ -43,6 +47,15 @@ export default function ModelRetrainingPage() {
       setModels(response.models || [])
     } catch (err) {
       console.error('Failed to load models:', err)
+    }
+  }
+
+  const loadAvailableAlgorithms = async () => {
+    try {
+      const response = await api.getAvailableAlgorithms()
+      setAvailableAlgorithms(response.algorithms)
+    } catch (err) {
+      console.error('Failed to load algorithms:', err)
     }
   }
 
@@ -60,21 +73,33 @@ export default function ModelRetrainingPage() {
       return
     }
 
+    if (selectedAlgorithms.length === 0) {
+      setError('Please select at least one algorithm')
+      return
+    }
+
     setLoading(true)
     setError(null)
     setUploadProgress('')
 
     try {
-      setUploadProgress('Training model... This may take a few minutes.')
+      setUploadProgress('Training advanced ensemble... This may take a few minutes.')
       
-      // Call the actual training API
+      // Call the enhanced training API
       const result = await api.trainModel({
-        dataset: 'koi.csv', // Use the default dataset for now
+        dataset: selectedDataset,
         model_name: modelName,
-        description: description
+        description: description,
+        test_size: testSize / 100, // Convert percentage to decimal
+        algorithms: selectedAlgorithms
       })
       
-      setUploadProgress(`Model training completed! Accuracy: ${(result.metrics?.accuracy * 100).toFixed(1)}%`)
+      if (result.cv_accuracy && result.algorithms_used) {
+        setUploadProgress(`🎯 Ensemble trained successfully! CV Accuracy: ${(result.cv_accuracy * 100).toFixed(1)}%, Test Accuracy: ${(result.metrics?.accuracy * 100).toFixed(1)}%, Used ${result.algorithms_used.length} algorithms`)
+      } else {
+        setUploadProgress(`Model training completed! Accuracy: ${(result.metrics?.accuracy * 100).toFixed(1)}%`)
+      }
+      
       await loadModels() // Refresh models list
       
     } catch (err) {
@@ -154,6 +179,58 @@ export default function ModelRetrainingPage() {
               <li>A target column with disposition values that map to: CONFIRMED, CANDIDATE, or FALSE POSITIVE</li>
               <li>Relevant features for classification</li>
             </ul>
+
+            {/* Dataset Selection */}
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-slate-300 mb-2">
+                Dataset
+              </label>
+              <select
+                value={selectedDataset}
+                onChange={(e) => setSelectedDataset(e.target.value)}
+                className="input-field w-full"
+              >
+                <option value="koi.csv">KOI Dataset (Kepler Objects of Interest)</option>
+                <option value="k2.csv">K2 Dataset</option>
+                <option value="toi.csv">TOI Dataset (TESS Objects of Interest)</option>
+              </select>
+            </div>
+            
+            {/* Algorithm Selection */}
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-slate-300 mb-2">
+                Algorithms (Select algorithms to include in ensemble)
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                {Object.entries(availableAlgorithms).map(([algo, available]) => (
+                  <label key={algo} className="flex items-center space-x-2">
+                    <input
+                      type="checkbox"
+                      checked={selectedAlgorithms.includes(algo)}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedAlgorithms([...selectedAlgorithms, algo])
+                        } else {
+                          setSelectedAlgorithms(selectedAlgorithms.filter(a => a !== algo))
+                        }
+                      }}
+                      disabled={!available}
+                      className="rounded border-slate-600 bg-slate-700 text-primary-500 focus:ring-primary-500"
+                    />
+                    <span className={`text-sm ${available ? 'text-slate-300' : 'text-slate-500'}`}>
+                      {algo === 'gradient_boosting' ? 'Gradient Boosting' :
+                       algo === 'random_forest' ? 'Random Forest' :
+                       algo === 'xgboost' ? 'XGBoost' :
+                       algo === 'lightgbm' ? 'LightGBM' : algo}
+                      {available ? ' ✓' : ' ⚠ Not Available'}
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <p className="text-xs text-slate-400 mt-2">
+                {selectedAlgorithms.length} algorithm(s) selected
+              </p>
+            </div>
 
             {/* Model Configuration */}
             <div className="grid md:grid-cols-2 gap-4 mb-6">
