@@ -49,21 +49,37 @@ export interface FeaturesResponse {
 }
 
 class APIClient {
-  private async request<T>(endpoint: string, options?: RequestInit): Promise<T> {
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-      ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...options?.headers,
-      },
-    })
+  private async request<T>(endpoint: string, options?: RequestInit & { timeout?: number }): Promise<T> {
+    const { timeout = 15000, ...fetchOptions } = options || {}
+    
+    const controller = new AbortController()
+    const timeoutId = timeout ? setTimeout(() => controller.abort(), timeout) : null
+    
+    try {
+      const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+        ...fetchOptions,
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json',
+          ...fetchOptions?.headers,
+        },
+      })
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: 'Unknown error' }))
-      throw new Error(error.detail || `HTTP ${response.status}`)
+      if (timeoutId) clearTimeout(timeoutId)
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: 'Unknown error' }))
+        throw new Error(error.detail || `HTTP ${response.status}`)
+      }
+
+      return response.json()
+    } catch (error) {
+      if (timeoutId) clearTimeout(timeoutId)
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('Request timeout')
+      }
+      throw error
     }
-
-    return response.json()
   }
 
   async healthCheck() {
@@ -89,7 +105,7 @@ class APIClient {
   }
 
   async getMetrics() {
-    return this.request<MetricsResponse>('/metrics')
+    return this.request<MetricsResponse>('/metrics', { timeout: 30000 }) // 30 second timeout for heavy operation
   }
 
   async getDataset(

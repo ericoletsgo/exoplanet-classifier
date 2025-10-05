@@ -16,6 +16,12 @@ export default function HomePage() {
       setModelInfo(metrics.model_info)
     } catch (error) {
       console.error('Failed to load model info:', error)
+      // Set default model info if loading fails
+      setModelInfo({
+        n_features: 19,
+        n_samples: 0,
+        classes: ['FALSE POSITIVE', 'CANDIDATE', 'CONFIRMED']
+      })
     }
   }
 

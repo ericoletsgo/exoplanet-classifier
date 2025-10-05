@@ -26,7 +26,7 @@ export default function PredictPage() {
 
   useEffect(() => {
     loadFeatures()
-    loadModelInfo()
+    // Model info loading is optional - will load when needed
   }, [])
 
   const loadFeatures = async () => {
@@ -51,6 +51,12 @@ export default function PredictPage() {
       setModelInfo(metrics.model_info)
     } catch (err) {
       console.error('Failed to load model info:', err)
+      // Set default model info if loading fails
+      setModelInfo({
+        n_features: 19,
+        n_samples: 0,
+        classes: ['FALSE POSITIVE', 'CANDIDATE', 'CONFIRMED']
+      })
     }
   }
 
