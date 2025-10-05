@@ -559,6 +559,29 @@ async def list_models():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list models: {str(e)}")
 
+# Add static file serving for production
+from fastapi.staticfiles import StaticFiles
+import os
+
+# Serve React build files in production
+if os.path.exists("static"):
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+    
+    # Serve React app for all non-API routes
+    from fastapi.responses import FileResponse
+    
+    @app.get("/{full_path:path}")
+    async def serve_react_app(full_path: str):
+        # Don't serve React for API routes
+        if full_path.startswith("api/") or full_path.startswith("docs") or full_path.startswith("redoc"):
+            raise HTTPException(status_code=404, detail="Not found")
+        
+        # Serve index.html for all other routes (React Router)
+        if os.path.exists("static/index.html"):
+            return FileResponse("static/index.html")
+        else:
+            raise HTTPException(status_code=404, detail="Frontend not built")
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

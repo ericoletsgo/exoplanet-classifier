@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Upload, Loader2, AlertCircle, CheckCircle, Trash2, BarChart3, Brain } from 'lucide-react'
+import { Upload, Loader2, AlertCircle, Trash2, BarChart3, Brain } from 'lucide-react'
 import { api } from '../lib/api'
 
 interface ModelMetadata {
