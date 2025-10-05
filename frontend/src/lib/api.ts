@@ -162,17 +162,57 @@ class APIClient {
     }>('/feature-correlations')
   }
 
-  async trainModel(data: { dataset: string; model_name: string; description: string }) {
+  async trainModel(data: { 
+    dataset: string
+    model_name: string
+    description: string
+    test_size?: number
+    algorithms?: string[]
+    hyperparameters?: {
+      // Gradient Boosting
+      gb_n_estimators?: number
+      gb_learning_rate?: number
+      gb_max_depth?: number
+      gb_min_samples_split?: number
+      // Random Forest
+      rf_n_estimators?: number
+      rf_max_depth?: number
+      rf_min_samples_split?: number
+      rf_max_features?: string
+      // XGBoost
+      xgb_n_estimators?: number
+      xgb_learning_rate?: number
+      xgb_max_depth?: number
+      xgb_subsample?: number
+      // LightGBM
+      lgb_n_estimators?: number
+      lgb_learning_rate?: number
+      lgb_max_depth?: number
+      lgb_num_leaves?: number
+    }
+    use_hyperparameter_tuning?: boolean
+  }) {
     return this.request<{
       status: string
       message: string
       model_id?: string
       metrics?: Record<string, any>
+      algorithms_used?: string[]
+      cv_accuracy?: number
+      dataset_summary?: Record<string, any>
     }>('/train', {
       method: 'POST',
       body: JSON.stringify(data),
       timeout: 120000 // 2 minute timeout for training
     })
+  }
+
+  async getAvailableAlgorithms() {
+    return this.request<{
+      algorithms: Record<string, boolean>
+      available_count: number
+      total_count: number
+    }>('/algorithms')
   }
 }
 

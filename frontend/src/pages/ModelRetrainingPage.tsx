@@ -23,6 +23,7 @@ interface ModelMetadata {
 export default function ModelRetrainingPage() {
   const [activeTab, setActiveTab] = useState<'train' | 'evaluations' | 'management'>('train')
   const [models, setModels] = useState<ModelMetadata[]>([])
+  const [availableAlgorithms, setAvailableAlgorithms] = useState<Record<string, boolean>>({})
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   
@@ -30,11 +31,39 @@ export default function ModelRetrainingPage() {
   const [modelName, setModelName] = useState('')
   const [testSize, setTestSize] = useState(20)
   const [description, setDescription] = useState('')
+  const [selectedDataset, setSelectedDataset] = useState('koi.csv')
+  const [selectedAlgorithms, setSelectedAlgorithms] = useState<string[]>(['gradient_boosting', 'random_forest', 'xgboost', 'lightgbm'])
   const [uploadedFile, setUploadedFile] = useState<File | null>(null)
   const [uploadProgress, setUploadProgress] = useState<string>('')
+  
+  // Hyperparameter states
+  const [useHyperparameterTuning, setUseHyperparameterTuning] = useState(false)
+  const [hyperparameters, setHyperparameters] = useState({
+    // Gradient Boosting
+    gb_n_estimators: 100,
+    gb_learning_rate: 0.1,
+    gb_max_depth: 3,
+    gb_min_samples_split: 2,
+    // Random Forest
+    rf_n_estimators: 100,
+    rf_max_depth: 10,
+    rf_min_samples_split: 2,
+    rf_max_features: 'sqrt',
+    // XGBoost
+    xgb_n_estimators: 100,
+    xgb_learning_rate: 0.05,
+    xgb_max_depth: 6,
+    xgb_subsample: 1.0,
+    // LightGBM
+    lgb_n_estimators: 100,
+    lgb_learning_rate: 0.05,
+    lgb_max_depth: -1,
+    lgb_num_leaves: 31
+  })
 
   useEffect(() => {
     loadModels()
+    loadAvailableAlgorithms()
   }, [])
 
   const loadModels = async () => {
@@ -43,6 +72,15 @@ export default function ModelRetrainingPage() {
       setModels(response.models || [])
     } catch (err) {
       console.error('Failed to load models:', err)
+    }
+  }
+
+  const loadAvailableAlgorithms = async () => {
+    try {
+      const response = await api.getAvailableAlgorithms()
+      setAvailableAlgorithms(response.algorithms)
+    } catch (err) {
+      console.error('Failed to load algorithms:', err)
     }
   }
 
@@ -60,21 +98,35 @@ export default function ModelRetrainingPage() {
       return
     }
 
+    if (selectedAlgorithms.length === 0) {
+      setError('Please select at least one algorithm')
+      return
+    }
+
     setLoading(true)
     setError(null)
     setUploadProgress('')
 
     try {
-      setUploadProgress('Training model... This may take a few minutes.')
+      setUploadProgress('Training advanced ensemble... This may take a few minutes.')
       
-      // Call the actual training API
+      // Call the enhanced training API
       const result = await api.trainModel({
-        dataset: 'koi.csv', // Use the default dataset for now
+        dataset: selectedDataset,
         model_name: modelName,
-        description: description
+        description: description,
+        test_size: testSize / 100, // Convert percentage to decimal
+        algorithms: selectedAlgorithms,
+        hyperparameters: hyperparameters,
+        use_hyperparameter_tuning: useHyperparameterTuning
       })
       
-      setUploadProgress(`Model training completed! Accuracy: ${(result.metrics?.accuracy * 100).toFixed(1)}%`)
+      if (result.cv_accuracy && result.algorithms_used) {
+        setUploadProgress(`🎯 Ensemble trained successfully! CV Accuracy: ${(result.cv_accuracy * 100).toFixed(1)}%, Test Accuracy: ${(result.metrics?.accuracy * 100).toFixed(1)}%, Used ${result.algorithms_used.length} algorithms`)
+      } else {
+        setUploadProgress(`Model training completed! Accuracy: ${(result.metrics?.accuracy * 100).toFixed(1)}%`)
+      }
+      
       await loadModels() // Refresh models list
       
     } catch (err) {
@@ -155,6 +207,58 @@ export default function ModelRetrainingPage() {
               <li>Relevant features for classification</li>
             </ul>
 
+            {/* Dataset Selection */}
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-slate-300 mb-2">
+                Dataset
+              </label>
+              <select
+                value={selectedDataset}
+                onChange={(e) => setSelectedDataset(e.target.value)}
+                className="input-field w-full"
+              >
+                <option value="koi.csv">KOI Dataset (Kepler Objects of Interest)</option>
+                <option value="k2.csv">K2 Dataset</option>
+                <option value="toi.csv">TOI Dataset (TESS Objects of Interest)</option>
+              </select>
+            </div>
+            
+            {/* Algorithm Selection */}
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-slate-300 mb-2">
+                Algorithms (Select algorithms to include in ensemble)
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                {Object.entries(availableAlgorithms).map(([algo, available]) => (
+                  <label key={algo} className="flex items-center space-x-2">
+                    <input
+                      type="checkbox"
+                      checked={selectedAlgorithms.includes(algo)}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedAlgorithms([...selectedAlgorithms, algo])
+                        } else {
+                          setSelectedAlgorithms(selectedAlgorithms.filter(a => a !== algo))
+                        }
+                      }}
+                      disabled={!available}
+                      className="rounded border-slate-600 bg-slate-700 text-primary-500 focus:ring-primary-500"
+                    />
+                    <span className={`text-sm ${available ? 'text-slate-300' : 'text-slate-500'}`}>
+                      {algo === 'gradient_boosting' ? 'Gradient Boosting' :
+                       algo === 'random_forest' ? 'Random Forest' :
+                       algo === 'xgboost' ? 'XGBoost' :
+                       algo === 'lightgbm' ? 'LightGBM' : algo}
+                      {available ? ' ✓' : ' ⚠ Not Available'}
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <p className="text-xs text-slate-400 mt-2">
+                {selectedAlgorithms.length} algorithm(s) selected
+              </p>
+            </div>
+
             {/* Model Configuration */}
             <div className="grid md:grid-cols-2 gap-4 mb-6">
               <div>
@@ -187,6 +291,249 @@ export default function ModelRetrainingPage() {
                   <span>40%</span>
                 </div>
               </div>
+            </div>
+
+            {/* Hyperparameter Tuning Toggle */}
+            <div className="mb-6">
+              <div className="flex items-center space-x-3">
+                <input
+                  type="checkbox"
+                  id="hyperparameter-tuning"
+                  checked={useHyperparameterTuning}
+                  onChange={(e) => setUseHyperparameterTuning(e.target.checked)}
+                  className="rounded border-slate-600 bg-slate-700 text-primary-500 focus:ring-primary-500"
+                />
+                <label htmlFor="hyperparameter-tuning" className="text-sm font-medium text-slate-300">
+                  Enable Hyperparameter Tuning (Grid Search)
+                </label>
+              </div>
+              <p className="text-xs text-slate-500 mt-1">
+                Automatically optimize algorithm parameters using grid search. Takes longer but may improve accuracy.
+              </p>
+            </div>
+
+            {/* Hyperparameter Controls */}
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-slate-300 mb-4">
+                Algorithm Hyperparameters
+              </label>
+              
+              {/* Gradient Boosting Parameters */}
+              {selectedAlgorithms.includes('gradient_boosting') && (
+                <div className="mb-6 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+                  <h4 className="text-sm font-semibold text-green-400 mb-3">Gradient Boosting</h4>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs text-slate-400 mb-1">N Estimators</label>
+                      <input
+                        type="number"
+                        min="50"
+                        max="500"
+                        value={hyperparameters.gb_n_estimators}
+                        onChange={(e) => setHyperparameters(prev => ({ ...prev, gb_n_estimators: Number(e.target.value) }))}
+                        className="input-field w-full text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-slate-400 mb-1">Learning Rate</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0.01"
+                        max="0.3"
+                        value={hyperparameters.gb_learning_rate}
+                        onChange={(e) => setHyperparameters(prev => ({ ...prev, gb_learning_rate: Number(e.target.value) }))}
+                        className="input-field w-full text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-slate-400 mb-1">Max Depth</label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="10"
+                        value={hyperparameters.gb_max_depth}
+                        onChange={(e) => setHyperparameters(prev => ({ ...prev, gb_max_depth: Number(e.target.value) }))}
+                        className="input-field w-full text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-slate-400 mb-1">Min Samples Split</label>
+                      <input
+                        type="number"
+                        min="2"
+                        max="20"
+                        value={hyperparameters.gb_min_samples_split}
+                        onChange={(e) => setHyperparameters(prev => ({ ...prev, gb_min_samples_split: Number(e.target.value) }))}
+                        className="input-field w-full text-sm"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Random Forest Parameters */}
+              {selectedAlgorithms.includes('random_forest') && (
+                <div className="mb-6 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+                  <h4 className="text-sm font-semibold text-blue-400 mb-3">Random Forest</h4>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs text-slate-400 mb-1">N Estimators</label>
+                      <input
+                        type="number"
+                        min="50"
+                        max="500"
+                        value={hyperparameters.rf_n_estimators}
+                        onChange={(e) => setHyperparameters(prev => ({ ...prev, rf_n_estimators: Number(e.target.value) }))}
+                        className="input-field w-full text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-slate-400 mb-1">Max Depth</label>
+                      <input
+                        type="number"
+                        min="5"
+                        max="20"
+                        value={hyperparameters.rf_max_depth}
+                        onChange={(e) => setHyperparameters(prev => ({ ...prev, rf_max_depth: Number(e.target.value) }))}
+                        className="input-field w-full text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-slate-400 mb-1">Min Samples Split</label>
+                      <input
+                        type="number"
+                        min="2"
+                        max="20"
+                        value={hyperparameters.rf_min_samples_split}
+                        onChange={(e) => setHyperparameters(prev => ({ ...prev, rf_min_samples_split: Number(e.target.value) }))}
+                        className="input-field w-full text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-slate-400 mb-1">Max Features</label>
+                      <select
+                        value={hyperparameters.rf_max_features}
+                        onChange={(e) => setHyperparameters(prev => ({ ...prev, rf_max_features: e.target.value }))}
+                        className="input-field w-full text-sm"
+                      >
+                        <option value="sqrt">sqrt</option>
+                        <option value="log2">log2</option>
+                        <option value="auto">auto</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* XGBoost Parameters */}
+              {selectedAlgorithms.includes('xgboost') && (
+                <div className="mb-6 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+                  <h4 className="text-sm font-semibold text-purple-400 mb-3">XGBoost</h4>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs text-slate-400 mb-1">N Estimators</label>
+                      <input
+                        type="number"
+                        min="50"
+                        max="500"
+                        value={hyperparameters.xgb_n_estimators}
+                        onChange={(e) => setHyperparameters(prev => ({ ...prev, xgb_n_estimators: Number(e.target.value) }))}
+                        className="input-field w-full text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-slate-400 mb-1">Learning Rate</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0.01"
+                        max="0.3"
+                        value={hyperparameters.xgb_learning_rate}
+                        onChange={(e) => setHyperparameters(prev => ({ ...prev, xgb_learning_rate: Number(e.target.value) }))}
+                        className="input-field w-full text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-slate-400 mb-1">Max Depth</label>
+                      <input
+                        type="number"
+                        min="3"
+                        max="10"
+                        value={hyperparameters.xgb_max_depth}
+                        onChange={(e) => setHyperparameters(prev => ({ ...prev, xgb_max_depth: Number(e.target.value) }))}
+                        className="input-field w-full text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-slate-400 mb-1">Subsample</label>
+                      <input
+                        type="number"
+                        step="0.1"
+                        min="0.6"
+                        max="1.0"
+                        value={hyperparameters.xgb_subsample}
+                        onChange={(e) => setHyperparameters(prev => ({ ...prev, xgb_subsample: Number(e.target.value) }))}
+                        className="input-field w-full text-sm"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* LightGBM Parameters */}
+              {selectedAlgorithms.includes('lightgbm') && (
+                <div className="mb-6 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+                  <h4 className="text-sm font-semibold text-yellow-400 mb-3">LightGBM</h4>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs text-slate-400 mb-1">N Estimators</label>
+                      <input
+                        type="number"
+                        min="50"
+                        max="500"
+                        value={hyperparameters.lgb_n_estimators}
+                        onChange={(e) => setHyperparameters(prev => ({ ...prev, lgb_n_estimators: Number(e.target.value) }))}
+                        className="input-field w-full text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-slate-400 mb-1">Learning Rate</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0.01"
+                        max="0.3"
+                        value={hyperparameters.lgb_learning_rate}
+                        onChange={(e) => setHyperparameters(prev => ({ ...prev, lgb_learning_rate: Number(e.target.value) }))}
+                        className="input-field w-full text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-slate-400 mb-1">Max Depth</label>
+                      <input
+                        type="number"
+                        min="-1"
+                        max="10"
+                        value={hyperparameters.lgb_max_depth}
+                        onChange={(e) => setHyperparameters(prev => ({ ...prev, lgb_max_depth: Number(e.target.value) }))}
+                        className="input-field w-full text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-slate-400 mb-1">Num Leaves</label>
+                      <input
+                        type="number"
+                        min="10"
+                        max="100"
+                        value={hyperparameters.lgb_num_leaves}
+                        onChange={(e) => setHyperparameters(prev => ({ ...prev, lgb_num_leaves: Number(e.target.value) }))}
+                        className="input-field w-full text-sm"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="mb-6">
