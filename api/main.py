@@ -24,25 +24,13 @@ app = FastAPI(
 # CORS middleware to allow frontend requests
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173", 
-        "http://localhost:3000",
-        "https://exoplanet-classifier-nu.vercel.app",  # Your specific Vercel domain
-        "https://*.vercel.app",  # Allow all Vercel deployments
-        "https://*.onrender.com",  # Allow all Render deployments
-        "https://*.railway.app",  # Allow all Railway deployments
-        "*"  # Allow all origins for production
-    ],
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
+    allow_origins=["*"],  # Allow all origins
+    allow_credentials=False,  # Must be False when allow_origins=["*"]
+    allow_methods=["*"],  # Allow all methods
+    allow_headers=["*"],  # Allow all headers
 )
 
-# Explicit OPTIONS handler for CORS preflight requests
-@app.options("/{full_path:path}")
-async def options_handler(full_path: str):
-    """Handle CORS preflight requests"""
-    return {"message": "OK"}
+# CORS middleware handles OPTIONS requests automatically
 
 # Constants
 # Get the parent directory (project root) to find model files
