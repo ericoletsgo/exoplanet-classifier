@@ -32,6 +32,8 @@ export default function ModelRetrainingPage() {
   const [testSize, setTestSize] = useState(20)
   const [description, setDescription] = useState('')
   const [selectedDataset, setSelectedDataset] = useState('koi.csv')
+  const [includeK2, setIncludeK2] = useState(false)
+  const [includeTOI, setIncludeTOI] = useState(false)
   const [selectedAlgorithms, setSelectedAlgorithms] = useState<string[]>(['gradient_boosting', 'random_forest', 'xgboost', 'lightgbm'])
   const [uploadedFile, setUploadedFile] = useState<File | null>(null)
   const [uploadProgress, setUploadProgress] = useState<string>('')
@@ -118,7 +120,9 @@ export default function ModelRetrainingPage() {
         test_size: testSize / 100, // Convert percentage to decimal
         algorithms: selectedAlgorithms,
         hyperparameters: hyperparameters,
-        use_hyperparameter_tuning: useHyperparameterTuning
+        use_hyperparameter_tuning: useHyperparameterTuning,
+        include_k2: includeK2,
+        include_toi: includeTOI
       })
       
       if (result.cv_accuracy && result.algorithms_used) {
@@ -220,8 +224,48 @@ export default function ModelRetrainingPage() {
                 <option value="koi.csv">KOI Dataset (Kepler Objects of Interest)</option>
                 <option value="k2.csv">K2 Dataset</option>
                 <option value="toi.csv">TOI Dataset (TESS Objects of Interest)</option>
+                <option value="combined">Combined Dataset (Multi-Mission)</option>
               </select>
+              <p className="text-xs text-slate-500 mt-1">
+                Choose which NASA dataset to train on. "Combined" allows training on multiple missions.
+              </p>
             </div>
+
+            {/* Multi-Dataset Options */}
+            {selectedDataset === 'combined' && (
+              <div className="mb-6 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+                <h4 className="text-sm font-semibold text-primary-400 mb-3">Multi-Mission Training Options</h4>
+                <div className="space-y-3">
+                  <div className="flex items-center space-x-3">
+                    <input
+                      type="checkbox"
+                      id="include-k2"
+                      checked={includeK2}
+                      onChange={(e) => setIncludeK2(e.target.checked)}
+                      className="rounded border-slate-600 bg-slate-700 text-primary-500 focus:ring-primary-500"
+                    />
+                    <label htmlFor="include-k2" className="text-sm text-slate-300">
+                      Include K2 Mission Data (4,004 samples)
+                    </label>
+                  </div>
+                  <div className="flex items-center space-x-3">
+                    <input
+                      type="checkbox"
+                      id="include-toi"
+                      checked={includeTOI}
+                      onChange={(e) => setIncludeTOI(e.target.checked)}
+                      className="rounded border-slate-600 bg-slate-700 text-primary-500 focus:ring-primary-500"
+                    />
+                    <label htmlFor="include-toi" className="text-sm text-slate-300">
+                      Include TOI Mission Data (7,703 samples)
+                    </label>
+                  </div>
+                </div>
+                <p className="text-xs text-slate-500 mt-2">
+                  KOI dataset is always included. Select additional missions for multi-mission training.
+                </p>
+              </div>
+            )}
             
             {/* Algorithm Selection */}
             <div className="mb-6">

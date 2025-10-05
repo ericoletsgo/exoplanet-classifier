@@ -104,6 +104,18 @@ export default function PredictPage() {
     }
   }
 
+  const handleLoadRandomExampleFromAll = async () => {
+    try {
+      const exampleData = await api.getRandomExampleFromAllDatasets()
+      setRandomExampleData(exampleData)
+      setFormData(exampleData.features)
+      setPrediction(null) // Clear previous prediction
+      setError(null)
+    } catch (err) {
+      setError('Failed to load random example from all datasets')
+    }
+  }
+
   const handleReset = () => {
     if (features) {
       const resetData: Record<string, number> = {}
@@ -149,7 +161,7 @@ export default function PredictPage() {
       {/* Random Example Buttons */}
       <div className="card">
         <h3 className="text-lg font-semibold mb-4">Load Random Examples</h3>
-        <div className="grid md:grid-cols-3 gap-3">
+        <div className="grid md:grid-cols-4 gap-3">
           <button
             onClick={() => handleLoadRandomExample('CONFIRMED')}
             className="btn-secondary flex items-center justify-center gap-2"
@@ -171,7 +183,17 @@ export default function PredictPage() {
             <Dice3 className="w-4 h-4" />
             Random False Positive
           </button>
+          <button
+            onClick={() => handleLoadRandomExampleFromAll()}
+            className="btn-primary flex items-center justify-center gap-2"
+          >
+            <Dice1 className="w-4 h-4" />
+            Random from All Missions
+          </button>
         </div>
+        <p className="text-sm text-slate-500 mt-3">
+          The first three buttons sample from the KOI dataset. The "Random from All Missions" button samples from KOI, K2, and TOI datasets combined.
+        </p>
       </div>
 
       {/* Random Example Information */}

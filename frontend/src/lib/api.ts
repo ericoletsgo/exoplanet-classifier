@@ -153,6 +153,25 @@ class APIClient {
     }>(url)
   }
 
+  async getRandomExampleFromAllDatasets(disposition?: string) {
+    const params = new URLSearchParams()
+    if (disposition) {
+      params.append('disposition', disposition)
+    }
+    const queryString = params.toString()
+    const url = `/random-example${queryString ? `?${queryString}` : ''}`
+    return this.request<{
+      features: Record<string, number>
+      metadata: {
+        row_index: number
+        koi_name: string
+        expected_disposition: string
+        dataset: string
+      }
+      raw_row: Record<string, any>
+    }>(url)
+  }
+
   async getFeatureCorrelations() {
     return this.request<{
       features: string[]
@@ -191,6 +210,8 @@ class APIClient {
       lgb_num_leaves?: number
     }
     use_hyperparameter_tuning?: boolean
+    include_k2?: boolean
+    include_toi?: boolean
   }) {
     return this.request<{
       status: string
