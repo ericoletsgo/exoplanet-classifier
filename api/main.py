@@ -999,8 +999,14 @@ async def get_feature_correlations():
         sample_size = min(5000, len(df))
         df_sample = df[available_features].sample(n=sample_size, random_state=42)
         
+        # Fill NaN values with 0 to prevent correlation calculation errors
+        df_sample = df_sample.fillna(0)
+        
         # Calculate correlation matrix
         correlation_matrix = df_sample.corr()
+        
+        # Replace NaN values with 0 for JSON serialization
+        correlation_matrix = correlation_matrix.fillna(0)
         
         # Convert to format suitable for frontend
         correlations = {
@@ -1013,6 +1019,9 @@ async def get_feature_correlations():
         return correlations
         
     except Exception as e:
+        print(f"[ERROR] Correlation calculation failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to calculate correlations: {str(e)}")
 
 @app.options("/algorithms")
