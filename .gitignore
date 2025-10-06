@@ -49,3 +49,7 @@ Thumbs.db
 *.json
 !requirements.txt
 !package*.json
+!vercel.json
+!tsconfig*.json
+!frontend/src/**/*.ts
+!frontend/src/**/*.tsx

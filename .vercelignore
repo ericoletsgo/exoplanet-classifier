@@ -1,0 +1,21 @@
+# Exclude large model files from Vercel deployment
+*.joblib
+*.pkl
+*.pickle
+
+# Exclude large data files
+*.csv
+data/
+
+# Exclude development files
+venv/
+env/
+__pycache__/
+*.pyc
+.vscode/
+.idea/
+
+# Exclude node_modules (will be installed by Vercel)
+node_modules/
+
+# Keep only essential files for deployment

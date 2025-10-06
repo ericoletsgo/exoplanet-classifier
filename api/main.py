@@ -35,7 +35,11 @@ app.add_middleware(
 # Constants
 # Get the parent directory (project root) to find model files
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Support external model URL for Vercel deployment (model files are too large for Vercel)
+MODEL_URL = os.environ.get("MODEL_URL", None)
 MODEL_PATH = os.path.join(BASE_DIR, "balanced_model_20251005_115605.joblib")
+
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 MODELS_METADATA_FILE = os.path.join(BASE_DIR, "models", "models_metadata.json")
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -236,6 +240,31 @@ model = None
 def load_model_on_startup():
     """Load the trained model at application startup"""
     global model
+    
+    # Try loading from URL first (for Vercel deployment)
+    if MODEL_URL:
+        try:
+            print(f"[INFO] Downloading model from {MODEL_URL}")
+            import urllib.request
+            import tempfile
+            
+            # Download to temporary file
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.joblib')
+            urllib.request.urlretrieve(MODEL_URL, temp_file.name)
+            
+            print(f"[INFO] Loading model from downloaded file")
+            model = joblib.load(temp_file.name)
+            print(f"[INFO] Model loaded: {type(model).__name__}")
+            
+            # Clean up temp file
+            os.unlink(temp_file.name)
+            return
+        except Exception as e:
+            print(f"[ERROR] Failed to load model from URL: {e}")
+            model = None
+            return
+    
+    # Fallback to local file
     if not os.path.exists(MODEL_PATH):
         print(f"[ERROR] Model file not found at {MODEL_PATH}")
         model = None
