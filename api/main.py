@@ -18,7 +18,7 @@ from sklearn.preprocessing import label_binarize
 app = FastAPI(
     title="Exoplanet Classifier API",
     description="REST API for exoplanet classification using machine learning",
-    version="1.0.6"  # Bumped to force deployment with predict-raw fix
+    version="1.0.9"  # Bumped to force deployment with metrics and predict-raw fixes
 )
 
 # CORS middleware to allow frontend requests
@@ -35,7 +35,7 @@ app.add_middleware(
 # Constants
 # Get the parent directory (project root) to find model files
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODEL_PATH = os.path.join(BASE_DIR, "balanced_model_20251005_115605.joblib")
+MODEL_PATH = os.path.join(BASE_DIR, "properly_trained_model.joblib")
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 MODELS_METADATA_FILE = os.path.join(BASE_DIR, "models", "models_metadata.json")
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -243,13 +243,35 @@ def load_model():
         print(f"[DEBUG] Model exists: {os.path.exists(MODEL_PATH)}")
         print(f"[DEBUG] Current working directory: {os.getcwd()}")
         print(f"[DEBUG] Files in current dir: {os.listdir('.')}")
+        print(f"[DEBUG] BASE_DIR: {BASE_DIR}")
+        print(f"[DEBUG] Files in BASE_DIR: {os.listdir(BASE_DIR) if os.path.exists(BASE_DIR) else 'BASE_DIR not found'}")
         
-        if not os.path.exists(MODEL_PATH):
-            raise HTTPException(status_code=404, detail=f"Model file not found: {MODEL_PATH}")
+        # Try multiple possible model locations
+        possible_paths = [
+            MODEL_PATH,
+            os.path.join(BASE_DIR, "balanced_model_20251005_115605.joblib"),
+            os.path.join(os.getcwd(), "properly_trained_model.joblib"),
+            os.path.join(os.getcwd(), "balanced_model_20251005_115605.joblib"),
+            "/app/properly_trained_model.joblib",
+            "/app/balanced_model_20251005_115605.joblib"
+        ]
+        
+        model_path_to_use = None
+        for path in possible_paths:
+            if os.path.exists(path):
+                print(f"[INFO] Found model at: {path}")
+                model_path_to_use = path
+                break
+        
+        if not model_path_to_use:
+            print(f"[ERROR] Model not found in any of these locations:")
+            for path in possible_paths:
+                print(f"  - {path}")
+            raise HTTPException(status_code=404, detail=f"Model file not found. Checked: {possible_paths}")
         
         try:
-            print(f"[INFO] Loading model from {MODEL_PATH}")
-            _model_cache = joblib.load(MODEL_PATH)
+            print(f"[INFO] Loading model from {model_path_to_use}")
+            _model_cache = joblib.load(model_path_to_use)
             print(f"[INFO] Model loaded successfully: {type(_model_cache).__name__}")
         except Exception as e:
             print(f"[ERROR] Failed to load model: {str(e)}")
@@ -272,11 +294,24 @@ def load_model_on_startup():
 
 def get_feature_names(model):
     """Extract feature names from model"""
-    if hasattr(model, 'feature_names'):
-        return model.feature_names
-    elif hasattr(model, 'feature_names_in_'):
+    # For Pipeline objects, use the model's feature_names_in_ (input features)
+    if hasattr(model, 'feature_names_in_'):
         return model.feature_names_in_.tolist()
+    
+    # Handle Pipeline objects with steps
+    if hasattr(model, 'steps') and len(model.steps) > 0:
+        # For Pipeline, get features from the last step (usually the classifier)
+        last_step = model.steps[-1][1]
+        if hasattr(last_step, 'feature_names_in_'):
+            return last_step.feature_names_in_.tolist()
+        elif hasattr(last_step, 'feature_names'):
+            return last_step.feature_names
+    
+    # Handle regular models
+    elif hasattr(model, 'feature_names'):
+        return model.feature_names
     else:
+        # Fallback to our predefined features
         return get_all_relevant_features()
 
 # API Endpoints
@@ -327,10 +362,11 @@ async def predict(request: PredictionRequest):
         
         feature_names = get_feature_names(model)
         
-        # Create feature vector in correct order
+        # Create feature vector with all required features
         feature_vector = []
         
         for feature in feature_names:
+            # Use provided value or default to 0
             feature_vector.append(request.features.get(feature, 0.0))
         
         # Make prediction
@@ -370,7 +406,10 @@ async def batch_predict(request: BatchPredictionRequest):
         # Create feature matrix for the entire batch
         feature_matrix = []
         for record in request.records:
-            feature_vector = [record.get(feature, 0.0) for feature in feature_names]
+            # Create feature vector with all required features
+            feature_vector = []
+            for feature in feature_names:
+                feature_vector.append(record.get(feature, 0.0))
             feature_matrix.append(feature_vector)
 
         if not feature_matrix:
@@ -415,8 +454,10 @@ async def predict_raw(request: dict):
         model = get_model()
         feature_names = get_feature_names(model)
         
-        # Extract features from raw row data
+        # Create feature vector with all required features
         feature_vector = []
+        
+        import pandas as pd
         for feature in feature_names:
             if feature in request and pd.notna(request[feature]):
                 feature_vector.append(float(request[feature]))
@@ -424,7 +465,8 @@ async def predict_raw(request: dict):
                 feature_vector.append(0.0)
         
         # Make prediction
-        X = np.array([feature_vector])
+        import pandas as pd
+        X = pd.DataFrame([feature_vector], columns=feature_names)
         prediction = model.predict(X)[0]
         probabilities = model.predict_proba(X)[0]
         
@@ -468,6 +510,31 @@ async def get_metrics():
             X = test_data['X_test']
             y = test_data['y_test']
             print(f"[INFO] Test set loaded: {len(X)} samples")
+            
+            # Check if test set features match model features
+            model_features = set(feature_names)
+            test_features = set(X.columns)
+            
+            if model_features != test_features:
+                print(f"[WARNING] Test set features don't match model features!")
+                print(f"[WARNING] Model expects {len(model_features)} features, test set has {len(test_features)}")
+                print(f"[WARNING] Missing features: {model_features - test_features}")
+                print(f"[WARNING] Using full dataset instead of test set for metrics")
+                
+                # Fallback to full dataset
+                koi_path = os.path.join(DATA_DIR, "koi.csv")
+                if not os.path.exists(koi_path):
+                    raise HTTPException(status_code=404, detail="Dataset not found")
+                
+                df = pd.read_csv(koi_path, comment='#')
+                df['target'] = df['koi_disposition'].map({'CONFIRMED': 2, 'CANDIDATE': 1, 'FALSE POSITIVE': 0})
+                df = df[df['target'].notna()]
+                
+                # Get features
+                available_features = [f for f in feature_names if f in df.columns]
+                
+                X = df[available_features].fillna(0)
+                y = df['target'].astype(int)
         else:
             # Fallback: Load full dataset (will show warning)
             # This is NOT ideal - metrics will be inflated
