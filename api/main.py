@@ -18,17 +18,19 @@ from sklearn.preprocessing import label_binarize
 app = FastAPI(
     title="Exoplanet Classifier API",
     description="REST API for exoplanet classification using machine learning",
-    version="1.0.0"
+    version="1.0.3"  # Bumped to force new deployment with random-example fixes
 )
 
 # CORS middleware to allow frontend requests
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],  # Vite default port
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["*"],  # Allow all origins
+    allow_credentials=False,  # Must be False when allow_origins=["*"]
+    allow_methods=["*"],  # Allow all methods
+    allow_headers=["*"],  # Allow all headers
 )
+
+# CORS middleware handles OPTIONS requests automatically
 
 # Constants
 # Get the parent directory (project root) to find model files
@@ -174,16 +176,50 @@ class MetricsResponse(BaseModel):
     feature_importances: Optional[List[Dict[str, Any]]] = None
     model_info: Dict[str, Any]
 
+class Hyperparameters(BaseModel):
+    # Gradient Boosting parameters
+    gb_n_estimators: int = Field(default=100, ge=50, le=500, description="Number of boosting stages")
+    gb_learning_rate: float = Field(default=0.1, ge=0.01, le=0.3, description="Learning rate shrinks contribution of each tree")
+    gb_max_depth: int = Field(default=3, ge=1, le=10, description="Maximum depth of individual regression estimators")
+    gb_min_samples_split: int = Field(default=2, ge=2, le=20, description="Minimum number of samples required to split an internal node")
+    
+    # Random Forest parameters
+    rf_n_estimators: int = Field(default=100, ge=50, le=500, description="Number of trees in the forest")
+    rf_max_depth: int = Field(default=10, ge=5, le=20, description="Maximum depth of the tree")
+    rf_min_samples_split: int = Field(default=2, ge=2, le=20, description="Minimum number of samples required to split an internal node")
+    rf_max_features: str = Field(default="sqrt", description="Number of features to consider when looking for the best split")
+    
+    # XGBoost parameters
+    xgb_n_estimators: int = Field(default=100, ge=50, le=500, description="Number of boosting rounds")
+    xgb_learning_rate: float = Field(default=0.05, ge=0.01, le=0.3, description="Boosting learning rate")
+    xgb_max_depth: int = Field(default=6, ge=3, le=10, description="Maximum tree depth for base learners")
+    xgb_subsample: float = Field(default=1.0, ge=0.6, le=1.0, description="Subsample ratio of the training instances")
+    
+    # LightGBM parameters
+    lgb_n_estimators: int = Field(default=100, ge=50, le=500, description="Number of boosting iterations")
+    lgb_learning_rate: float = Field(default=0.05, ge=0.01, le=0.3, description="Boosting learning rate")
+    lgb_max_depth: int = Field(default=-1, ge=-1, le=10, description="Maximum tree depth (-1 means no limit)")
+    lgb_num_leaves: int = Field(default=31, ge=10, le=100, description="Maximum number of leaves in one tree")
+
 class TrainingRequest(BaseModel):
-    dataset: str = Field(default="koi.csv", description="Dataset to train on (koi.csv, k2.csv, toi.csv)")
+    dataset: str = Field(default="koi.csv", description="Dataset to train on (koi.csv, k2.csv, toi.csv, or 'combined' for all datasets)")
     model_name: str = Field(default="New Model", description="Name for the trained model")
     description: str = Field(default="", description="Description of the model")
+    test_size: float = Field(default=0.2, description="Test set size (0.1-0.5)")
+    algorithms: List[str] = Field(default=["gradient_boosting", "random_forest", "xgboost", "lightgbm"], description="Algorithms to include in ensemble")
+    hyperparameters: Optional[Hyperparameters] = Field(default=None, description="Algorithm-specific hyperparameters")
+    use_hyperparameter_tuning: bool = Field(default=False, description="Enable hyperparameter tuning with grid search")
+    include_k2: bool = Field(default=False, description="Include K2 dataset in combined training")
+    include_toi: bool = Field(default=False, description="Include TOI dataset in combined training")
 
 class TrainingResponse(BaseModel):
     status: str
     message: str
     model_id: Optional[str] = None
     metrics: Optional[Dict[str, Any]] = None
+    algorithms_used: Optional[List[str]] = None
+    cv_accuracy: Optional[float] = None
+    dataset_summary: Optional[Dict[str, Any]] = None
 
 class DatasetResponse(BaseModel):
     total_rows: int
@@ -232,13 +268,22 @@ def get_feature_names(model):
 @app.get("/")
 async def root():
     """Health check endpoint"""
+    model_status = "unknown"
+    try:
+        load_model()
+        model_status = "loaded"
+    except Exception as e:
+        model_status = f"error: {str(e)}"
+    
     return {
         "status": "online",
         "service": "Exoplanet Classifier API",
         "version": "1.0.0",
+        "model_status": model_status,
         "endpoints": ["/predict", "/metrics", "/train", "/datasets", "/features"]
     }
 
+@app.options("/features")
 @app.get("/features")
 async def get_features():
     """Get list of all features required for prediction with human-readable labels"""
@@ -250,6 +295,7 @@ async def get_features():
         "categories": list(RELEVANT_FEATURES.keys())
     }
 
+@app.options("/predict")
 @app.post("/predict", response_model=PredictionResponse)
 async def predict(request: PredictionRequest):
     """Make a prediction using the trained model"""
@@ -379,6 +425,7 @@ async def predict_raw(request: dict):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Raw prediction failed: {str(e)}")
 
+@app.options("/metrics")
 @app.get("/metrics", response_model=MetricsResponse)
 async def get_metrics():
     """Get model performance metrics on held-out test set"""
@@ -487,22 +534,300 @@ async def get_metrics():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get metrics: {str(e)}")
 
+@app.options("/train")
 @app.post("/train", response_model=TrainingResponse)
-async def train_model(request: TrainingRequest, background_tasks: BackgroundTasks):
-    """Trigger model training (runs in background)"""
+async def train_advanced_ensemble(request: TrainingRequest, background_tasks: BackgroundTasks):
+    """Advanced ensemble training matching Streamlit functionality"""
     try:
-        # For now, return a message that training is not implemented in API
-        # In production, you'd use Celery or similar for background tasks
+        # Load the dataset(s)
+        if request.dataset == "combined":
+            # Load multiple datasets and combine them
+            datasets = []
+            dataset_info = []
+            
+            # Always include KOI as base
+            koi_path = os.path.join(DATA_DIR, "koi.csv")
+            if os.path.exists(koi_path):
+                koi_df = pd.read_csv(koi_path, comment='#')
+                koi_df['target'] = koi_df['koi_disposition'].map({'CONFIRMED': 2, 'CANDIDATE': 1, 'FALSE POSITIVE': 0})
+                koi_df = koi_df[koi_df['target'].notna()]
+                koi_df['dataset_source'] = 'koi'
+                datasets.append(koi_df)
+                dataset_info.append(f"KOI: {len(koi_df)} samples")
+            
+            # Include K2 if requested
+            if request.include_k2:
+                k2_path = os.path.join(DATA_DIR, "k2_converted.csv")
+                if os.path.exists(k2_path):
+                    k2_df = pd.read_csv(k2_path, comment='#')
+                    k2_df['target'] = k2_df['koi_disposition'].map({'CONFIRMED': 2, 'CANDIDATE': 1, 'FALSE POSITIVE': 0})
+                    k2_df = k2_df[k2_df['target'].notna()]
+                    k2_df['dataset_source'] = 'k2'
+                    datasets.append(k2_df)
+                    dataset_info.append(f"K2: {len(k2_df)} samples")
+            
+            # Include TOI if requested
+            if request.include_toi:
+                toi_path = os.path.join(DATA_DIR, "toi.csv")
+                if os.path.exists(toi_path):
+                    toi_df = pd.read_csv(toi_path, comment='#')
+                    # TOI uses different disposition mapping - convert to standard format
+                    toi_df['target'] = toi_df['koi_disposition'].map({'CONFIRMED': 2, 'CANDIDATE': 1, 'FALSE POSITIVE': 0})
+                    toi_df = toi_df[toi_df['target'].notna()]
+                    toi_df['dataset_source'] = 'toi'
+                    datasets.append(toi_df)
+                    dataset_info.append(f"TOI: {len(toi_df)} samples")
+            
+            if len(datasets) == 0:
+                raise HTTPException(status_code=404, detail="No datasets found for combined training")
+            
+            # Combine all datasets
+            df = pd.concat(datasets, ignore_index=True, sort=False)
+            print(f"[INFO] Combined dataset created with {len(df)} samples from: {', '.join(dataset_info)}")
+            
+        else:
+            # Single dataset training (original logic)
+            dataset_path = os.path.join(DATA_DIR, request.dataset)
+            if not os.path.exists(dataset_path):
+                raise HTTPException(status_code=404, detail=f"Dataset not found: {request.dataset}")
+            
+            df = pd.read_csv(dataset_path, comment='#')
+            df['target'] = df['koi_disposition'].map({'CONFIRMED': 2, 'CANDIDATE': 1, 'FALSE POSITIVE': 0})
+            df = df[df['target'].notna()]
+            df['dataset_source'] = request.dataset.replace('.csv', '')
+        
+        # Get numeric features (same approach as Streamlit)
+        numeric_features = df.select_dtypes(include=[np.number]).columns.tolist()
+        if 'target' in numeric_features:
+            numeric_features.remove('target')
+        
+        # Prepare features and target
+        X = df[numeric_features].fillna(0)
+        y = df['target']
+        
+        # Split data with configurable test size
+        from sklearn.model_selection import train_test_split
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=request.test_size, random_state=42, stratify=y
+        )
+        
+        # Create models based on request with hyperparameters
+        from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier, VotingClassifier
+        models = []
+        algorithms_used = []
+        
+        # Use default hyperparameters if not provided
+        hyperparams = request.hyperparameters or Hyperparameters()
+        
+        # Always include basic models
+        if 'gradient_boosting' in request.algorithms:
+            gb_model = GradientBoostingClassifier(
+                n_estimators=hyperparams.gb_n_estimators,
+                learning_rate=hyperparams.gb_learning_rate,
+                max_depth=hyperparams.gb_max_depth,
+                min_samples_split=hyperparams.gb_min_samples_split,
+                random_state=42
+            )
+            models.append(('gradient_boosting', gb_model))
+            algorithms_used.append('gradient_boosting')
+        
+        if 'random_forest' in request.algorithms:
+            rf_model = RandomForestClassifier(
+                n_estimators=hyperparams.rf_n_estimators,
+                max_depth=hyperparams.rf_max_depth,
+                min_samples_split=hyperparams.rf_min_samples_split,
+                max_features=hyperparams.rf_max_features,
+                random_state=42
+            )
+            models.append(('random_forest', rf_model))
+            algorithms_used.append('random_forest')
+        
+        # Try XGBoost
+        if 'xgboost' in request.algorithms:
+            try:
+                import xgboost as xgb
+                xgb_model = xgb.XGBClassifier(
+                    n_estimators=hyperparams.xgb_n_estimators,
+                    learning_rate=hyperparams.xgb_learning_rate,
+                    max_depth=hyperparams.xgb_max_depth,
+                    subsample=hyperparams.xgb_subsample,
+                    random_state=42,
+                    eval_metric='logloss'
+                )
+                models.append(('xgboost', xgb_model))
+                algorithms_used.append('xgboost')
+            except ImportError:
+                pass  # XGBoost not available
+                
+        # Try LightGBM
+        if 'lightgbm' in request.algorithms:
+            try:
+                import lightgbm as lgb
+                lgb_model = lgb.LGBMClassifier(
+                    n_estimators=hyperparams.lgb_n_estimators,
+                    learning_rate=hyperparams.lgb_learning_rate,
+                    max_depth=hyperparams.lgb_max_depth,
+                    num_leaves=hyperparams.lgb_num_leaves,
+                    random_state=42,
+                    verbose=-1
+                )
+                models.append(('lightgbm', lgb_model))
+                algorithms_used.append('lightgbm')
+            except ImportError:
+                pass  # LightGBM not available
+        
+        if len(models) == 0:
+            raise HTTPException(status_code=400, detail="No algorithms could be loaded")
+        
+        # Create ensemble (same as Streamlit)
+        ensemble = VotingClassifier(models, voting='soft')
+        
+        # Hyperparameter tuning with grid search if enabled
+        if request.use_hyperparameter_tuning:
+            print("[INFO] Starting hyperparameter tuning with grid search...")
+            from sklearn.model_selection import GridSearchCV
+            
+            # Define parameter grid for ensemble tuning
+            param_grid = {
+                'voting': ['soft', 'hard']
+            }
+            
+            # Add individual algorithm tuning if only one algorithm is selected
+            if len(request.algorithms) == 1:
+                algorithm = request.algorithms[0]
+                if algorithm == 'gradient_boosting':
+                    param_grid.update({
+                        'gradient_boosting__learning_rate': [0.05, 0.1, 0.15],
+                        'gradient_boosting__max_depth': [3, 5, 7],
+                        'gradient_boosting__n_estimators': [100, 200]
+                    })
+                elif algorithm == 'random_forest':
+                    param_grid.update({
+                        'random_forest__max_depth': [5, 10, 15],
+                        'random_forest__n_estimators': [100, 200],
+                        'random_forest__max_features': ['sqrt', 'log2']
+                    })
+                elif algorithm == 'xgboost':
+                    param_grid.update({
+                        'xgboost__learning_rate': [0.05, 0.1, 0.15],
+                        'xgboost__max_depth': [4, 6, 8],
+                        'xgboost__n_estimators': [100, 200]
+                    })
+                elif algorithm == 'lightgbm':
+                    param_grid.update({
+                        'lightgbm__learning_rate': [0.05, 0.1, 0.15],
+                        'lightgbm__max_depth': [3, 5, 7],
+                        'lightgbm__num_leaves': [20, 31, 50]
+                    })
+            
+            # Perform grid search with cross-validation
+            grid_search = GridSearchCV(
+                ensemble, 
+                param_grid, 
+                cv=3, 
+                scoring='accuracy', 
+                n_jobs=-1, 
+                verbose=1
+            )
+            
+            grid_search.fit(X_train, y_train)
+            ensemble = grid_search.best_estimator_
+            
+            print(f"[INFO] Best parameters: {grid_search.best_params_}")
+            print(f"[INFO] Best cross-validation score: {grid_search.best_score_:.4f}")
+        else:
+            # Train the model normally
+            ensemble.fit(X_train, y_train)
+        
+        # Cross-validation accuracy (same as Streamlit)
+        from sklearn.model_selection import cross_val_score
+        cv_scores = cross_val_score(ensemble, X_train, y_train, cv=3, scoring='accuracy')
+        cv_accuracy = cv_scores.mean()
+        
+        # Test set evaluation
+        from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+        y_pred = ensemble.predict(X_test)
+        
+        metrics = {
+            'accuracy': float(accuracy_score(y_test, y_pred)),
+            'precision': float(precision_score(y_test, y_pred, average='weighted', zero_division=0)),
+            'recall': float(recall_score(y_test, y_pred, average='weighted', zero_division=0)),
+            'f1_score': float(f1_score(y_test, y_pred, average='weighted', zero_division=0)),
+            'train_samples': len(X_train),
+            'test_samples': len(X_test),
+            'n_features': len(numeric_features)
+        }
+        
+        # Generate model ID
+        model_id = f"advanced_ensemble_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        
+        # Save model (in production, you'd save to a proper model store)
+        model_path = os.path.join(MODELS_DIR, f"{model_id}.joblib")
+        os.makedirs(MODELS_DIR, exist_ok=True)
+        
+        # Store metadata (same as Streamlit)
+        ensemble.model_id = model_id
+        ensemble.model_name = request.model_name
+        ensemble.description = request.description
+        ensemble.cv_accuracy = cv_accuracy
+        ensemble.feature_names = numeric_features
+        ensemble.dataset_summary = {'total_samples': len(X)}
+        ensemble.algorithms_used = algorithms_used
+        ensemble.created_at = datetime.now().isoformat()
+        
+        joblib.dump(ensemble, model_path)
+        
+        # Update models metadata
+        metadata_file = os.path.join(MODELS_DIR, "models_metadata.json")
+        if os.path.exists(metadata_file):
+            with open(metadata_file, 'r') as f:
+                metadata = json.load(f)
+        else:
+            metadata = []
+        
+        model_metadata = {
+            'id': model_id,
+            'name': request.model_name,
+            'description': request.description,
+            'created_at': ensemble.created_at,
+            'train_accuracy': cv_accuracy,  # Cross-validation accuracy
+            'test_accuracy': metrics['accuracy'],
+            'precision': metrics['precision'],
+            'recall': metrics['recall'],
+            'f1_score': metrics['f1_score'],
+            'algorithms': algorithms_used,
+            'n_features': len(numeric_features),
+            'train_samples': len(X_train),
+            'test_samples': len(X_test),
+            'model_path': model_path
+        }
+        
+        metadata.append(model_metadata)
+        
+        with open(metadata_file, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        
+        # Create dataset summary with source information
+        dataset_summary = {
+            'total_samples': len(X), 
+            'features': len(numeric_features),
+            'dataset_sources': df['dataset_source'].value_counts().to_dict() if 'dataset_source' in df.columns else {request.dataset.replace('.csv', ''): len(X)}
+        }
+        
         return TrainingResponse(
-            status="not_implemented",
-            message="Training endpoint is not yet implemented. Please use the Streamlit interface or training scripts.",
-            model_id=None,
-            metrics=None
+            status="completed",
+            message=f"🎯 Ensemble trained successfully! CV Accuracy: {cv_accuracy:.1%}, Test Accuracy: {metrics['accuracy']:.1%}",
+            model_id=model_id,
+            metrics=metrics,
+            algorithms_used=algorithms_used,
+            cv_accuracy=cv_accuracy,
+            dataset_summary=dataset_summary
         )
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Training failed: {str(e)}")
 
+@app.options("/datasets/{dataset_name}")
 @app.get("/datasets/{dataset_name}", response_model=DatasetResponse)
 async def get_dataset(
     dataset_name: str,
@@ -551,6 +876,7 @@ async def get_dataset(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load dataset: {str(e)}")
 
+@app.options("/random-example/{dataset_name}")
 @app.get("/random-example/{dataset_name}")
 async def get_random_example(dataset_name: str, disposition: Optional[str] = None):
     """Get a random example from the dataset for testing predictions"""
@@ -560,7 +886,12 @@ async def get_random_example(dataset_name: str, disposition: Optional[str] = Non
         if dataset_name not in valid_datasets:
             raise HTTPException(status_code=400, detail=f"Invalid dataset. Must be one of: {valid_datasets}")
         
-        file_path = os.path.join(DATA_DIR, f"{dataset_name}.csv")
+        # Use k2_converted for K2 dataset
+        if dataset_name == "k2":
+            file_path = os.path.join(DATA_DIR, "k2_converted.csv")
+        else:
+            file_path = os.path.join(DATA_DIR, f"{dataset_name}.csv")
+            
         if not os.path.exists(file_path):
             raise HTTPException(status_code=404, detail=f"Dataset file not found: {file_path}")
         
@@ -591,7 +922,7 @@ async def get_random_example(dataset_name: str, disposition: Optional[str] = Non
         # Get additional metadata
         metadata = {
             'row_index': int(random_row.name),
-            'koi_name': str(random_row.get('kepoi_name', 'Unknown')),
+            'koi_name': str(random_row.get('kepoi_name', random_row.get('toi_id', 'Unknown'))),
             'expected_disposition': str(random_row.get('koi_disposition', 'Unknown')),
             'dataset': dataset_name
         }
@@ -605,6 +936,79 @@ async def get_random_example(dataset_name: str, disposition: Optional[str] = Non
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get random example: {str(e)}")
 
+@app.options("/random-example")
+@app.get("/random-example")
+async def get_random_example_from_all_datasets(disposition: Optional[str] = None):
+    """Get a random example from all available datasets"""
+    try:
+        # Get all available datasets
+        available_datasets = []
+        
+        # Check KOI
+        koi_path = os.path.join(DATA_DIR, "koi.csv")
+        if os.path.exists(koi_path):
+            koi_df = pd.read_csv(koi_path, comment='#')
+            if disposition and 'koi_disposition' in koi_df.columns:
+                koi_df = koi_df[koi_df['koi_disposition'] == disposition.upper()]
+            if len(koi_df) > 0:
+                available_datasets.append(('koi', koi_df, koi_path))
+        
+        # Check K2
+        k2_path = os.path.join(DATA_DIR, "k2_converted.csv")
+        if os.path.exists(k2_path):
+            k2_df = pd.read_csv(k2_path, comment='#')
+            if disposition and 'koi_disposition' in k2_df.columns:
+                k2_df = k2_df[k2_df['koi_disposition'] == disposition.upper()]
+            if len(k2_df) > 0:
+                available_datasets.append(('k2', k2_df, k2_path))
+        
+        # Check TOI
+        toi_path = os.path.join(DATA_DIR, "toi.csv")
+        if os.path.exists(toi_path):
+            toi_df = pd.read_csv(toi_path, comment='#')
+            if disposition and 'koi_disposition' in toi_df.columns:
+                toi_df = toi_df[toi_df['koi_disposition'] == disposition.upper()]
+            if len(toi_df) > 0:
+                available_datasets.append(('toi', toi_df, toi_path))
+        
+        if len(available_datasets) == 0:
+            raise HTTPException(status_code=404, detail=f"No examples found for disposition: {disposition}")
+        
+        # Randomly select a dataset
+        selected_index = np.random.choice(len(available_datasets))
+        dataset_name, df, _ = available_datasets[selected_index]
+        
+        # Get random row from selected dataset
+        random_row = df.sample(n=1).iloc[0]
+        
+        # Extract key features for the frontend
+        feature_names = get_all_relevant_features()
+        features = {}
+        
+        for feature in feature_names:
+            if feature in random_row and pd.notna(random_row[feature]):
+                features[feature] = float(random_row[feature])
+            else:
+                features[feature] = 0.0
+        
+        # Get additional metadata
+        metadata = {
+            'row_index': int(random_row.name),
+            'koi_name': str(random_row.get('kepoi_name', random_row.get('toi_id', 'Unknown'))),
+            'expected_disposition': str(random_row.get('koi_disposition', 'Unknown')),
+            'dataset': dataset_name
+        }
+        
+        return {
+            'features': features,
+            'metadata': metadata,
+            'raw_row': random_row.replace({np.nan: None}).to_dict()
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get random example: {str(e)}")
+
+@app.options("/models")
 @app.get("/models")
 async def list_models():
     """List all available trained models"""
@@ -619,6 +1023,123 @@ async def list_models():
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list models: {str(e)}")
+
+@app.options("/feature-correlations")
+@app.get("/feature-correlations")
+async def get_feature_correlations():
+    """Get feature correlation matrix for visualization"""
+    try:
+        # Load a sample of the dataset for correlation analysis
+        koi_path = os.path.join(DATA_DIR, "koi.csv")
+        if not os.path.exists(koi_path):
+            raise HTTPException(status_code=404, detail="Dataset not found")
+        
+        # Load a sample of the data
+        df = pd.read_csv(koi_path, comment='#')
+        
+        # Get the relevant features used by the model
+        model = load_model()
+        feature_names = get_feature_names(model)
+        
+        # Filter to only features that exist in the dataset
+        available_features = [f for f in feature_names if f in df.columns]
+        
+        # Take a sample for performance (correlation computation can be expensive)
+        sample_size = min(5000, len(df))
+        df_sample = df[available_features].sample(n=sample_size, random_state=42)
+        
+        # Calculate correlation matrix
+        correlation_matrix = df_sample.corr()
+        
+        # Convert to format suitable for frontend
+        correlations = {
+            "features": list(correlation_matrix.columns),
+            "matrix": correlation_matrix.values.tolist(),
+            "sample_size": sample_size,
+            "total_features": len(available_features)
+        }
+        
+        return correlations
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to calculate correlations: {str(e)}")
+
+@app.options("/algorithms")
+@app.get("/algorithms")
+async def get_available_algorithms():
+    """Check which algorithms are available for training"""
+    algorithms = {
+        "gradient_boosting": True,  # Always available
+        "random_forest": True,      # Always available
+        "xgboost": False,
+        "lightgbm": False
+    }
+    
+    # Check XGBoost availability
+    try:
+        import xgboost as xgb
+        algorithms["xgboost"] = True
+    except ImportError:
+        pass
+    
+    # Check LightGBM availability
+    try:
+        import lightgbm as lgb
+        algorithms["lightgbm"] = True
+    except ImportError:
+        pass
+    
+    return {
+        "algorithms": algorithms,
+        "available_count": sum(algorithms.values()),
+        "total_count": len(algorithms)
+    }
+
+# Add static file serving for production
+from fastapi.staticfiles import StaticFiles
+import os
+
+# Serve React build files in production
+if os.path.exists("static"):
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+    
+    # Serve React app for frontend routes only
+    from fastapi.responses import FileResponse
+    
+    # Serve React app for non-conflicting frontend routes
+    @app.get("/batch")
+    async def serve_batch_page():
+        if os.path.exists("static/index.html"):
+            return FileResponse("static/index.html")
+        else:
+            raise HTTPException(status_code=404, detail="Frontend not built")
+    
+    @app.get("/retrain")
+    async def serve_retrain_page():
+        if os.path.exists("static/index.html"):
+            return FileResponse("static/index.html")
+        else:
+            raise HTTPException(status_code=404, detail="Frontend not built")
+    
+    # Catch-all for other frontend routes (React Router will handle routing)
+    @app.get("/{full_path:path}")
+    async def serve_react_app(full_path: str):
+        # Don't serve React for API routes or system routes
+        if (full_path.startswith("api/") or 
+            full_path.startswith("docs") or 
+            full_path.startswith("redoc") or
+            full_path.startswith("static/") or
+            full_path == "openapi.json" or
+            full_path in ["features", "metrics", "predict", "train", "datasets", "models", "random-example"] or
+            full_path.startswith("datasets/") or
+            full_path.startswith("random-example/")):
+            raise HTTPException(status_code=404, detail="Not found")
+        
+        # Serve React app for all other routes
+        if os.path.exists("static/index.html"):
+            return FileResponse("static/index.html")
+        else:
+            raise HTTPException(status_code=404, detail="Frontend not built")
 
 if __name__ == "__main__":
     import uvicorn

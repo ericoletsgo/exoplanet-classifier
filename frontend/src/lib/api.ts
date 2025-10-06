@@ -1,7 +1,14 @@
-const API_BASE_URL = '/api'
+const API_BASE_URL = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:8000' : '')
+
+// Debug logging
+if (typeof window !== 'undefined') {
+  console.log('API_BASE_URL:', API_BASE_URL)
+  console.log('VITE_API_URL env var:', import.meta.env.VITE_API_URL)
+}
 
 export interface PredictionRequest {
   features: Record<string, number>
+  model_id?: string
 }
 
 export interface PredictionResponse {
@@ -56,22 +63,76 @@ export interface FeaturesResponse {
   categories: string[]
 }
 
+export interface DatasetColumnsResponse {
+  dataset: string
+  total_rows: number
+  total_columns: number
+  columns: Array<{
+    name: string
+    type: string
+    non_null_count: number
+    null_count: number
+    sample_values?: string[]
+    unique_count?: number
+  }>
+}
+
+export interface ModelEvaluationResponse {
+  model_id: string
+  model_info: {
+    name: string
+    description: string
+    created_at: string
+    algorithms: string[]
+    n_features: number
+  }
+  metrics: {
+    train_accuracy: number
+    test_accuracy: number
+    precision: number
+    recall: number
+    f1_score: number
+  }
+  confusion_matrix: number[][]
+  dataset_info: {
+    train_samples: number
+    test_samples: number
+  }
+  features: string[]
+}
+
 class APIClient {
-  private async request<T>(endpoint: string, options?: RequestInit): Promise<T> {
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-      ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...options?.headers,
-      },
-    })
+  private async request<T>(endpoint: string, options?: RequestInit & { timeout?: number }): Promise<T> {
+    const { timeout = 15000, ...fetchOptions } = options || {}
+    
+    const controller = new AbortController()
+    const timeoutId = timeout ? setTimeout(() => controller.abort(), timeout) : null
+    
+    try {
+      const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+        ...fetchOptions,
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json',
+          ...fetchOptions?.headers,
+        },
+      })
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: 'Unknown error' }))
-      throw new Error(error.detail || `HTTP ${response.status}`)
+      if (timeoutId) clearTimeout(timeoutId)
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: 'Unknown error' }))
+        throw new Error(error.detail || `HTTP ${response.status}`)
+      }
+
+      return response.json()
+    } catch (error) {
+      if (timeoutId) clearTimeout(timeoutId)
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('Request timeout')
+      }
+      throw error
     }
-
-    return response.json()
   }
 
   async healthCheck() {
@@ -104,7 +165,7 @@ class APIClient {
   }
 
   async getMetrics() {
-    return this.request<MetricsResponse>('/metrics')
+    return this.request<MetricsResponse>('/metrics', { timeout: 30000 }) // 30 second timeout for heavy operation
   }
 
   async getDataset(
@@ -121,6 +182,14 @@ class APIClient {
       params.append('filter_disposition', filterDisposition)
     }
     return this.request<DatasetResponse>(`/datasets/${datasetName}?${params}`)
+  }
+
+  async getDatasetColumns(datasetName: string) {
+    return this.request<DatasetColumnsResponse>(`/datasets/${datasetName}/columns`)
+  }
+
+  async evaluateModel(modelId: string) {
+    return this.request<ModelEvaluationResponse>(`/models/${modelId}/evaluate`)
   }
 
   async listModels() {
@@ -144,6 +213,74 @@ class APIClient {
       }
       raw_row: Record<string, any>
     }>(url)
+  }
+
+
+  async getFeatureCorrelations() {
+    return this.request<{
+      features: string[]
+      matrix: number[][]
+      sample_size: number
+      total_features: number
+    }>('/feature-correlations')
+  }
+
+  async trainModel(data: { 
+    dataset: string
+    model_name: string
+    description: string
+    test_size?: number
+    algorithms?: string[]
+    hyperparameters?: {
+      // Gradient Boosting
+      gb_n_estimators?: number
+      gb_learning_rate?: number
+      gb_max_depth?: number
+      gb_min_samples_split?: number
+      // Random Forest
+      rf_n_estimators?: number
+      rf_max_depth?: number
+      rf_min_samples_split?: number
+      rf_max_features?: string
+      // XGBoost
+      xgb_n_estimators?: number
+      xgb_learning_rate?: number
+      xgb_max_depth?: number
+      xgb_subsample?: number
+      // LightGBM
+      lgb_n_estimators?: number
+      lgb_learning_rate?: number
+      lgb_max_depth?: number
+      lgb_num_leaves?: number
+    }
+    use_hyperparameter_tuning?: boolean
+    include_k2?: boolean
+    include_toi?: boolean
+    target_column?: string
+    target_mapping?: Record<string, number>
+    csv_data?: string
+  }) {
+    return this.request<{
+      status: string
+      message: string
+      model_id?: string
+      metrics?: Record<string, any>
+      algorithms_used?: string[]
+      cv_accuracy?: number
+      dataset_summary?: Record<string, any>
+    }>('/train', {
+      method: 'POST',
+      body: JSON.stringify(data),
+      timeout: 120000 // 2 minute timeout for training
+    })
+  }
+
+  async getAvailableAlgorithms() {
+    return this.request<{
+      algorithms: Record<string, boolean>
+      available_count: number
+      total_count: number
+    }>('/algorithms')
   }
 }
 

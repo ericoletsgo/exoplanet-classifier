@@ -1,23 +1,8 @@
-import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Target, BarChart3, Database, TrendingUp, Upload, Brain } from 'lucide-react'
-import { api } from '../lib/api'
+import { Target, BarChart3, Database, Upload, Brain } from 'lucide-react'
 
 export default function HomePage() {
-  const [modelInfo, setModelInfo] = useState<any>(null)
-
-  useEffect(() => {
-    loadModelInfo()
-  }, [])
-
-  const loadModelInfo = async () => {
-    try {
-      const metrics = await api.getMetrics()
-      setModelInfo(metrics.model_info)
-    } catch (error) {
-      console.error('Failed to load model info:', error)
-    }
-  }
+  // Removed modelInfo state and loading to prevent slow page loads
 
   const features = [
     {
@@ -86,33 +71,7 @@ export default function HomePage() {
         })}
       </div>
 
-      {/* Quick Stats */}
-      {modelInfo && (
-        <div className="card">
-          <h3 className="text-xl font-semibold mb-4 flex items-center gap-2">
-            <TrendingUp className="w-5 h-5 text-primary-500" />
-            Model Information
-          </h3>
-          <div className="grid md:grid-cols-3 gap-4">
-            <div>
-              <p className="text-sm text-slate-400">Features</p>
-              <p className="text-2xl font-bold text-white">{modelInfo.n_features}</p>
-            </div>
-            <div>
-              <p className="text-sm text-slate-400">Training Samples</p>
-              <p className="text-2xl font-bold text-white">
-                {modelInfo.n_samples?.toLocaleString() || 'N/A'}
-              </p>
-            </div>
-            <div>
-              <p className="text-sm text-slate-400">Classes</p>
-              <p className="text-2xl font-bold text-white">
-                {modelInfo.classes?.length || 3}
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Quick Stats - Removed to prevent slow loading */}
 
       {/* About */}
       <div className="card bg-slate-800/50">

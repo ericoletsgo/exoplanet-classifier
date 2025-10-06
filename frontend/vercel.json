@@ -1,0 +1,42 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "package.json",
+      "use": "@vercel/static-build",
+      "config": {
+        "distDir": "dist"
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "https://exoplanet-classifier.onrender.com/$1"
+    },
+    {
+      "src": "/predict",
+      "dest": "/dist/index.html"
+    },
+    {
+      "src": "/batch",
+      "dest": "/dist/index.html"
+    },
+    {
+      "src": "/metrics",
+      "dest": "/dist/index.html"
+    },
+    {
+      "src": "/retrain",
+      "dest": "/dist/index.html"
+    },
+    {
+      "src": "/datasets",
+      "dest": "/dist/index.html"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/dist/$1"
+    }
+  ]
+}
