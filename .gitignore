@@ -39,13 +39,18 @@ Thumbs.db
 # Logs
 *.log
 
-# Model files (large)
+# Model files (large) - exclude most but allow main models
 *.joblib
+!balanced_model_20251005_115605.joblib
+!properly_trained_model.joblib
 *.pkl
 *.pickle
 
-# Data files (large)
+# Data files (large) - exclude most but allow main datasets
 *.csv
+!data/koi.csv
+!data/k2_converted.csv
+!data/toi.csv
 *.json
 !requirements.txt
 !package*.json
