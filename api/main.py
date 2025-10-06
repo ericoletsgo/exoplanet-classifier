@@ -18,7 +18,7 @@ from sklearn.preprocessing import label_binarize
 app = FastAPI(
     title="Exoplanet Classifier API",
     description="REST API for exoplanet classification using machine learning",
-    version="1.0.5"  # Bumped to force deployment with evaluate_model fix
+    version="1.0.6"  # Bumped to force deployment with predict-raw fix
 )
 
 # CORS middleware to allow frontend requests
@@ -233,29 +233,42 @@ class DatasetResponse(BaseModel):
     total_pages: int
 
 # Global model cache
-model = None
+_model_cache = None
+
+def load_model():
+    """Load the trained model"""
+    global _model_cache
+    if _model_cache is None:
+        print(f"[DEBUG] Model path: {MODEL_PATH}")
+        print(f"[DEBUG] Model exists: {os.path.exists(MODEL_PATH)}")
+        print(f"[DEBUG] Current working directory: {os.getcwd()}")
+        print(f"[DEBUG] Files in current dir: {os.listdir('.')}")
+        
+        if not os.path.exists(MODEL_PATH):
+            raise HTTPException(status_code=404, detail=f"Model file not found: {MODEL_PATH}")
+        
+        try:
+            print(f"[INFO] Loading model from {MODEL_PATH}")
+            _model_cache = joblib.load(MODEL_PATH)
+            print(f"[INFO] Model loaded successfully: {type(_model_cache).__name__}")
+        except Exception as e:
+            print(f"[ERROR] Failed to load model: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Model loading failed: {str(e)}")
+    
+    return _model_cache
+
+def get_model():
+    """Get the loaded model, loading it if necessary"""
+    return load_model()
 
 @app.on_event("startup")
 def load_model_on_startup():
     """Load the trained model at application startup"""
-    global model
-    if not os.path.exists(MODEL_PATH):
-        print(f"[ERROR] Model file not found at {MODEL_PATH}")
-        model = None
-        return
-    
-    print(f"[INFO] Loading model from {MODEL_PATH}")
-    model = joblib.load(MODEL_PATH)
-    print(f"[INFO] Model loaded: {type(model).__name__}")
-
-def get_model():
-    """Get the loaded model, raising an error if it's not available"""
-    if model is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Model is not loaded. Check server logs for errors."
-        )
-    return model
+    try:
+        load_model()
+        print("[INFO] Model loaded successfully at startup")
+    except Exception as e:
+        print(f"[ERROR] Failed to load model at startup: {str(e)}")
 
 def get_feature_names(model):
     """Extract feature names from model"""
