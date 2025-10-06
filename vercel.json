@@ -2,7 +2,11 @@
   "version": 2,
   "builds": [
     {
-      "src": "frontend/package.json",
+      "src": "api/main.py",
+      "use": "@vercel/python"
+    },
+    {
+      "src": "frontend/package.json", 
       "use": "@vercel/static-build",
       "config": {
         "distDir": "dist"
@@ -12,11 +16,16 @@
   "routes": [
     {
       "src": "/api/(.*)",
-      "dest": "https://your-backend-url.railway.app/api/$1"
+      "dest": "/api/main.py"
     },
     {
       "src": "/(.*)",
       "dest": "/frontend/dist/$1"
     }
-  ]
+  ],
+  "functions": {
+    "api/main.py": {
+      "maxDuration": 30
+    }
+  }
 }
