@@ -185,7 +185,7 @@ class APIClient {
   }
 
   async getDatasetColumns(datasetName: string) {
-    return this.request<DatasetColumnsResponse>(`/datasets/${datasetName}/columns`)
+    return this.request<DatasetColumnsResponse>(`/datasets/${datasetName}/columns`, { timeout: 20000 }) // 20 second timeout for columns
   }
 
   async evaluateModel(modelId: string) {
@@ -193,7 +193,7 @@ class APIClient {
   }
 
   async listModels() {
-    return this.request<{ models: any[] }>('/models')
+    return this.request<{ models: any[] }>('/models', { timeout: 30000 }) // 30 second timeout for models
   }
 
   async getRandomExample(datasetName: string, disposition?: string) {
@@ -280,7 +280,7 @@ class APIClient {
       algorithms: Record<string, boolean>
       available_count: number
       total_count: number
-    }>('/algorithms')
+    }>('/algorithms', { timeout: 20000 }) // 20 second timeout for algorithms
   }
 }
 

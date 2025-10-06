@@ -18,7 +18,7 @@ from sklearn.preprocessing import label_binarize
 app = FastAPI(
     title="Exoplanet Classifier API",
     description="REST API for exoplanet classification using machine learning",
-    version="1.1.1"  # Bumped to force deployment with balanced model and routing fixes
+    version="1.1.2"  # Bumped to force deployment with timeout and error handling improvements
 )
 
 # CORS middleware to allow frontend requests
@@ -29,6 +29,16 @@ app.add_middleware(
     allow_methods=["*"],  # Allow all methods
     allow_headers=["*"],  # Allow all headers
 )
+
+# Add timeout middleware for better error handling
+@app.middleware("http")
+async def timeout_middleware(request, call_next):
+    import asyncio
+    try:
+        response = await asyncio.wait_for(call_next(request), timeout=30.0)
+        return response
+    except asyncio.TimeoutError:
+        return {"error": "Request timeout", "detail": "The request took too long to process"}
 
 # CORS middleware handles OPTIONS requests automatically
 
@@ -328,9 +338,10 @@ async def root():
     return {
         "status": "online",
         "service": "Exoplanet Classifier API",
-        "version": "1.0.0",
+        "version": "1.1.2",
         "model_status": model_status,
-        "endpoints": ["/predict", "/metrics", "/train", "/datasets", "/features"]
+        "endpoints": ["/predict", "/metrics", "/train", "/datasets", "/features", "/models", "/batch-predict"],
+        "timestamp": datetime.now().isoformat()
     }
 
 @app.options("/features")
@@ -1192,6 +1203,25 @@ async def get_random_example_from_all_datasets(disposition: Optional[str] = None
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get random example: {str(e)}")
+
+@app.get("/health")
+async def health_check():
+    """Dedicated health check endpoint for monitoring"""
+    try:
+        model = get_model()
+        return {
+            "status": "healthy",
+            "model_loaded": True,
+            "model_type": type(model).__name__,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "model_loaded": False,
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
 
 @app.options("/models")
 @app.get("/models")
