@@ -874,7 +874,7 @@ export default function ModelRetrainingPage() {
                   <div className="bg-slate-800/50 p-3 rounded">
                     <div className="text-xs text-slate-400 mb-1">F1 Score</div>
                     <div className="text-2xl font-bold text-green-400">
-                      {(modelEvaluation.metrics.f1_score * 100).toFixed(1)}%
+                      {modelEvaluation.metrics.f1_score.toFixed(3)}
                     </div>
                   </div>
                 </div>
@@ -976,7 +976,7 @@ export default function ModelRetrainingPage() {
                 <div className="bg-slate-800/50 p-3 rounded">
                   <div className="text-xs text-slate-400 mb-1">F1 Score</div>
                   <div className="text-2xl font-bold text-green-400">
-                    {(modelEvaluation.metrics.f1_score * 100).toFixed(1)}%
+                    {modelEvaluation.metrics.f1_score.toFixed(3)}
                   </div>
                 </div>
               </div>
@@ -1059,7 +1059,7 @@ export default function ModelRetrainingPage() {
                           </td>
                           <td className="p-3 text-sm">{(model.precision * 100).toFixed(1)}%</td>
                           <td className="p-3 text-sm">{(model.recall * 100).toFixed(1)}%</td>
-                          <td className="p-3 text-sm">{(model.f1_score * 100).toFixed(1)}%</td>
+                          <td className="p-3 text-sm">{model.f1_score.toFixed(3)}</td>
                           <td className="p-3 text-sm">{model.n_features}</td>
                           <td className="p-3">
                             <button
