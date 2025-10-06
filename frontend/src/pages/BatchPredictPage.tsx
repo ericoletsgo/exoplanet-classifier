@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Upload, Loader2, AlertCircle, CheckCircle, Download } from 'lucide-react'
 import { api } from '../lib/api'
 
@@ -23,6 +23,21 @@ export default function BatchPredictPage() {
   const [error, setError] = useState<string | null>(null)
   const [step, setStep] = useState<'upload' | 'mapping' | 'results'>('upload')
   const [availableFeatures, setAvailableFeatures] = useState<string[]>([])
+  const [models, setModels] = useState<any[]>([])
+  const [selectedModelId, setSelectedModelId] = useState<string | null>(null)
+
+  useEffect(() => {
+    loadModels()
+  }, [])
+
+  const loadModels = async () => {
+    try {
+      const response = await api.listModels()
+      setModels(response.models || [])
+    } catch (err) {
+      console.error('Failed to load models:', err)
+    }
+  }
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const uploadedFile = e.target.files?.[0]
@@ -111,8 +126,11 @@ export default function BatchPredictPage() {
           }
         })
 
-        // Make prediction
-        const prediction = await api.predict({ features })
+        // Make prediction with selected model
+        const prediction = await api.predict({ 
+          features,
+          model_id: selectedModelId || undefined
+        })
         
         results.push({
           row: i + 1,
@@ -173,6 +191,30 @@ export default function BatchPredictPage() {
         </h1>
         <p className="text-slate-400 mt-2">Upload a CSV file to classify multiple candidates</p>
       </div>
+
+      {/* Model Selection */}
+      {models.length > 0 && (
+        <div className="card">
+          <h3 className="text-lg font-semibold mb-3">Select Model</h3>
+          <select
+            value={selectedModelId || ''}
+            onChange={(e) => setSelectedModelId(e.target.value || null)}
+            className="input-field w-full"
+          >
+            <option value="">Default Model (Latest)</option>
+            {models.map((model) => (
+              <option key={model.id} value={model.id}>
+                {model.name} - {(model.test_accuracy * 100).toFixed(1)}% accuracy
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-slate-500 mt-2">
+            {selectedModelId 
+              ? `Using model: ${models.find(m => m.id === selectedModelId)?.name || 'Unknown'}`
+              : 'Using the default model for batch predictions'}
+          </p>
+        </div>
+      )}
 
       {error && (
         <div className="card bg-red-900/20 border-red-700">

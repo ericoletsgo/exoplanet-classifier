@@ -33,7 +33,6 @@ export default function ModelRetrainingPage() {
   const [description, setDescription] = useState('')
   const [selectedDataset, setSelectedDataset] = useState('koi.csv')
   const [includeK2, setIncludeK2] = useState(false)
-  const [includeTOI, setIncludeTOI] = useState(false)
   const [selectedAlgorithms, setSelectedAlgorithms] = useState<string[]>(['gradient_boosting', 'random_forest', 'xgboost', 'lightgbm'])
   const [uploadedFile, setUploadedFile] = useState<File | null>(null)
   const [uploadProgress, setUploadProgress] = useState<string>('')
@@ -237,7 +236,6 @@ export default function ModelRetrainingPage() {
         hyperparameters: hyperparameters,
         use_hyperparameter_tuning: useHyperparameterTuning,
         include_k2: includeK2,
-        include_toi: includeTOI,
         target_column: targetColumn || undefined,
         target_mapping: Object.keys(targetMapping).length > 0 ? targetMapping : undefined,
         csv_data: uploadedFile ? csvContent : undefined
@@ -351,9 +349,8 @@ export default function ModelRetrainingPage() {
                   onChange={(e) => setSelectedDataset(e.target.value)}
                   className="input-field w-full"
                 >
-                  <option value="koi.csv">KOI Dataset (Kepler Objects of Interest)</option>
+                  <option value="koi.csv">KOI Dataset (Kepler Objects ofInterest)</option>
                   <option value="k2.csv">K2 Dataset</option>
-                  <option value="toi.csv">TOI Dataset (TESS Objects of Interest)</option>
                   <option value="combined">Combined Dataset (Multi-Mission)</option>
                 </select>
                 <p className="text-xs text-slate-500 mt-1">
@@ -505,21 +502,9 @@ export default function ModelRetrainingPage() {
                       Include K2 Mission Data (4,004 samples)
                     </label>
                   </div>
-                  <div className="flex items-center space-x-3">
-                    <input
-                      type="checkbox"
-                      id="include-toi"
-                      checked={includeTOI}
-                      onChange={(e) => setIncludeTOI(e.target.checked)}
-                      className="rounded border-slate-600 bg-slate-700 text-primary-500 focus:ring-primary-500"
-                    />
-                    <label htmlFor="include-toi" className="text-sm text-slate-300">
-                      Include TOI Mission Data (7,703 samples)
-                    </label>
-                  </div>
                 </div>
                 <p className="text-xs text-slate-500 mt-2">
-                  KOI dataset is always included. Select additional missions for multi-mission training.
+                  KOI dataset is always included. Check to add K2 mission data.
                 </p>
               </div>
             )}
