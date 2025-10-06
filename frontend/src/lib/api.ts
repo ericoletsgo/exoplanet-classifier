@@ -8,6 +8,7 @@ if (typeof window !== 'undefined') {
 
 export interface PredictionRequest {
   features: Record<string, number>
+  model_id?: string
 }
 
 export interface PredictionResponse {
@@ -52,6 +53,44 @@ export interface FeaturesResponse {
   descriptions: Record<string, string>
   total_features: number
   categories: string[]
+}
+
+export interface DatasetColumnsResponse {
+  dataset: string
+  total_rows: number
+  total_columns: number
+  columns: Array<{
+    name: string
+    type: string
+    non_null_count: number
+    null_count: number
+    sample_values?: string[]
+    unique_count?: number
+  }>
+}
+
+export interface ModelEvaluationResponse {
+  model_id: string
+  model_info: {
+    name: string
+    description: string
+    created_at: string
+    algorithms: string[]
+    n_features: number
+  }
+  metrics: {
+    train_accuracy: number
+    test_accuracy: number
+    precision: number
+    recall: number
+    f1_score: number
+  }
+  confusion_matrix: number[][]
+  dataset_info: {
+    train_samples: number
+    test_samples: number
+  }
+  features: string[]
 }
 
 class APIClient {
@@ -128,6 +167,14 @@ class APIClient {
       params.append('filter_disposition', filterDisposition)
     }
     return this.request<DatasetResponse>(`/datasets/${datasetName}?${params}`)
+  }
+
+  async getDatasetColumns(datasetName: string) {
+    return this.request<DatasetColumnsResponse>(`/datasets/${datasetName}/columns`)
+  }
+
+  async evaluateModel(modelId: string) {
+    return this.request<ModelEvaluationResponse>(`/models/${modelId}/evaluate`)
   }
 
   async listModels() {
@@ -212,6 +259,9 @@ class APIClient {
     use_hyperparameter_tuning?: boolean
     include_k2?: boolean
     include_toi?: boolean
+    target_column?: string
+    target_mapping?: Record<string, number>
+    csv_data?: string
   }) {
     return this.request<{
       status: string
