@@ -26,17 +26,6 @@ export interface BatchPredictionResponse {
   predictions: PredictionResponse[]
 }
 
-export interface MetricsResponse {
-  accuracy: number
-  precision: number
-  recall: number
-  f1_score: number
-  confusion_matrix: number[][]
-  roc_data?: Record<string, { fpr: number[]; tpr: number[]; auc: number }>
-  feature_importances?: Array<{ feature: string; importance: number }>
-  model_info: Record<string, any>
-}
-
 export interface DatasetResponse {
   total_rows: number
   columns: string[]
@@ -164,9 +153,6 @@ class APIClient {
     })
   }
 
-  async getMetrics() {
-    return this.request<MetricsResponse>('/metrics', { timeout: 30000 }) // 30 second timeout for heavy operation
-  }
 
   async getDataset(
     datasetName: string,
@@ -216,14 +202,6 @@ class APIClient {
   }
 
 
-  async getFeatureCorrelations() {
-    return this.request<{
-      features: string[]
-      matrix: number[][]
-      sample_size: number
-      total_features: number
-    }>('/feature-correlations')
-  }
 
   async trainModel(data: { 
     dataset: string

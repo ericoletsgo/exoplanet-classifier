@@ -1,8 +1,7 @@
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom'
-import { Home, Target, BarChart3, Database, Upload, Brain } from 'lucide-react'
+import { Home, Target, Database, Upload, Brain } from 'lucide-react'
 import HomePage from './pages/HomePage'
 import PredictPage from './pages/PredictPage'
-import MetricsPage from './pages/MetricsPage'
 import DatasetsPage from './pages/DatasetsPage'
 import BatchPredictPage from './pages/BatchPredictPage'
 import ModelRetrainingPage from './pages/ModelRetrainingPage'
@@ -15,7 +14,6 @@ function Navigation() {
     { path: '/predict', icon: Target, label: 'Predict' },
     { path: '/batch', icon: Upload, label: 'Batch Upload' },
     { path: '/retrain', icon: Brain, label: 'Model Retraining' },
-    { path: '/metrics', icon: BarChart3, label: 'Metrics' },
     { path: '/datasets', icon: Database, label: 'Datasets' },
   ]
   
@@ -68,7 +66,6 @@ function App() {
             <Route path="/predict" element={<PredictPage />} />
             <Route path="/batch" element={<BatchPredictPage />} />
             <Route path="/retrain" element={<ModelRetrainingPage />} />
-            <Route path="/metrics" element={<MetricsPage />} />
             <Route path="/datasets" element={<DatasetsPage />} />
           </Routes>
         </main>

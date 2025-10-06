@@ -12,9 +12,6 @@ import numpy as np
 import json
 import os
 from datetime import datetime
-from datetime import timedelta
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix, roc_curve, auc
-from sklearn.preprocessing import label_binarize
 
 app = FastAPI(
     title="Exoplanet Classifier API",
@@ -180,15 +177,6 @@ class BatchPredictionRequest(BaseModel):
 class BatchPredictionResponse(BaseModel):
     predictions: List[PredictionResponse]
 
-class MetricsResponse(BaseModel):
-    accuracy: float
-    precision: float
-    recall: float
-    f1_score: float
-    confusion_matrix: List[List[int]]
-    roc_data: Optional[Dict[str, Any]] = None
-    feature_importances: Optional[List[Dict[str, Any]]] = None
-    model_info: Dict[str, Any]
 
 class Hyperparameters(BaseModel):
     # Gradient Boosting parameters
@@ -245,11 +233,8 @@ class DatasetResponse(BaseModel):
     page_size: int
     total_pages: int
 
-# Global caches for performance
+# Global variables
 model = None
-metrics_cache = None
-correlations_cache = None
-models_metadata_cache = None
 
 @app.on_event("startup")
 def load_model_on_startup():
@@ -507,125 +492,6 @@ async def predict_raw(request: dict):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Raw prediction failed: {str(e)}")
 
-@app.options("/metrics")
-@app.get("/metrics", response_model=MetricsResponse)
-async def get_metrics():
-    """Get model performance metrics on held-out test set - OPTIMIZED with caching"""
-    global metrics_cache
-    
-    # Return cached metrics if available (valid for 1 hour)
-    if metrics_cache and metrics_cache.get('timestamp'):
-        cache_time = datetime.fromisoformat(metrics_cache['timestamp'])
-        if datetime.now() - cache_time < timedelta(hours=1):
-            print("[INFO] Returning cached metrics")
-            return MetricsResponse(**metrics_cache['data'])
-    
-    try:
-        model = get_model()
-        
-        # Get feature names from model
-        feature_names = get_feature_names(model)
-        
-        # Use a smaller sample for faster computation (1000 samples max)
-        koi_path = os.path.join(DATA_DIR, "koi.csv")
-        if not os.path.exists(koi_path):
-            raise HTTPException(status_code=404, detail="Dataset not found")
-        
-        print("[INFO] Loading sample dataset for metrics (optimized)")
-        df = pd.read_csv(koi_path, comment='#')
-        df['target'] = df['koi_disposition'].map({'CONFIRMED': 2, 'CANDIDATE': 1, 'FALSE POSITIVE': 0})
-        df = df[df['target'].notna()]
-        
-        # Use stratified sample for representative metrics
-        sample_size = min(1000, len(df))
-        df_sample = df.groupby('target', group_keys=False).apply(
-            lambda x: x.sample(min(len(x), sample_size // 3), random_state=42)
-        )
-        
-        # Get features
-        available_features = [f for f in feature_names if f in df_sample.columns]
-        X = df_sample[available_features].fillna(0)
-        y = df_sample['target'].astype(int)
-        
-        print(f"[INFO] Computing metrics on {len(X)} samples")
-        
-        # Make predictions
-        y_pred = model.predict(X)
-        y_proba = model.predict_proba(X)
-        
-        # Calculate metrics
-        accuracy = accuracy_score(y, y_pred)
-        precision = precision_score(y, y_pred, average='weighted', zero_division=0)
-        recall = recall_score(y, y_pred, average='weighted', zero_division=0)
-        f1 = f1_score(y, y_pred, average='weighted', zero_division=0)
-        cm = confusion_matrix(y, y_pred)
-        
-        # Simplified ROC data (only AUC, not full curves)
-        y_bin = label_binarize(y, classes=[0, 1, 2])
-        roc_data = {}
-        
-        for i, label in enumerate(["FALSE POSITIVE", "CANDIDATE", "CONFIRMED"]):
-            fpr, tpr, _ = roc_curve(y_bin[:, i], y_proba[:, i])
-            roc_auc = auc(fpr, tpr)
-            roc_data[label] = {
-                "auc": float(roc_auc)
-            }
-        
-        # Feature importances
-        feature_importances = None
-        if hasattr(model, 'feature_importances_'):
-            importances = model.feature_importances_
-            feature_importances = [
-                {"feature": name, "importance": float(imp)}
-                for name, imp in zip(feature_names, importances)
-            ]
-            feature_importances.sort(key=lambda x: x['importance'], reverse=True)
-        elif hasattr(model, 'estimators_'):
-            # For ensemble models, try to get from first estimator
-            try:
-                first_estimator = model.estimators_[0][1] if hasattr(model.estimators_[0], '__getitem__') else model.estimators_[0]
-                if hasattr(first_estimator, 'feature_importances_'):
-                    importances = first_estimator.feature_importances_
-                    feature_importances = [
-                        {"feature": name, "importance": float(imp)}
-                        for name, imp in zip(feature_names, importances)
-                    ]
-                    feature_importances.sort(key=lambda x: x['importance'], reverse=True)
-            except:
-                pass
-        
-        # Model info
-        model_info = {
-            "model_type": type(model).__name__,
-            "n_features": len(feature_names),
-            "n_samples": len(X),
-            "classes": ["FALSE POSITIVE", "CANDIDATE", "CONFIRMED"]
-        }
-        
-        if hasattr(model, 'metadata'):
-            model_info.update(model.metadata)
-        
-        result = MetricsResponse(
-            accuracy=float(accuracy),
-            precision=float(precision),
-            recall=float(recall),
-            f1_score=float(f1),
-            confusion_matrix=cm.tolist(),
-            roc_data=roc_data,
-            feature_importances=feature_importances,
-            model_info=model_info
-        )
-        
-        # Cache the result
-        metrics_cache = {
-            'data': result.dict(),
-            'timestamp': datetime.now().isoformat()
-        }
-        
-        return result
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get metrics: {str(e)}")
 
 @app.options("/train")
 @app.post("/train", response_model=TrainingResponse)
@@ -1353,71 +1219,6 @@ async def get_dataset_columns(dataset_name: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get dataset columns: {str(e)}")
 
-@app.options("/feature-correlations")
-@app.get("/feature-correlations")
-async def get_feature_correlations():
-    """Get feature correlation matrix for visualization - OPTIMIZED with caching"""
-    global correlations_cache
-    
-    # Return cached correlations if available (valid for 2 hours)
-    if correlations_cache and correlations_cache.get('timestamp'):
-        cache_time = datetime.fromisoformat(correlations_cache['timestamp'])
-        if datetime.now() - cache_time < timedelta(hours=2):
-            print("[INFO] Returning cached correlations")
-            return correlations_cache['data']
-    
-    try:
-        # Load a sample of the dataset for correlation analysis
-        koi_path = os.path.join(DATA_DIR, "koi.csv")
-        if not os.path.exists(koi_path):
-            raise HTTPException(status_code=404, detail="Dataset not found")
-        
-        # Load a smaller sample for faster computation
-        df = pd.read_csv(koi_path, comment='#')
-        
-        # Get the relevant features used by the model
-        model = get_model()
-        feature_names = get_feature_names(model)
-        
-        # Filter to only features that exist in the dataset
-        available_features = [f for f in feature_names if f in df.columns]
-        
-        # Take a smaller sample for performance (1000 samples max)
-        sample_size = min(1000, len(df))
-        df_sample = df[available_features].sample(n=sample_size, random_state=42)
-        
-        # Fill NaN values with 0 to prevent correlation calculation errors
-        df_sample = df_sample.fillna(0)
-        
-        print(f"[INFO] Computing correlations on {sample_size} samples")
-        
-        # Calculate correlation matrix
-        correlation_matrix = df_sample.corr()
-        
-        # Replace NaN values with 0 for JSON serialization
-        correlation_matrix = correlation_matrix.fillna(0)
-        
-        # Convert to format suitable for frontend
-        correlations = {
-            "features": list(correlation_matrix.columns),
-            "matrix": correlation_matrix.values.tolist(),
-            "sample_size": sample_size,
-            "total_features": len(available_features)
-        }
-        
-        # Cache the result
-        correlations_cache = {
-            'data': correlations,
-            'timestamp': datetime.now().isoformat()
-        }
-        
-        return correlations
-        
-    except Exception as e:
-        print(f"[ERROR] Correlation calculation failed: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Failed to calculate correlations: {str(e)}")
 
 @app.options("/algorithms")
 @app.get("/algorithms")
