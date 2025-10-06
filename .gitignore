@@ -49,3 +49,4 @@ Thumbs.db
 *.json
 !requirements.txt
 !package*.json
+.vercel
