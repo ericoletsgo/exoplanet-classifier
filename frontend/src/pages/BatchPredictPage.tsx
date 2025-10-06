@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Upload, Loader2, AlertCircle, CheckCircle, Download } from 'lucide-react'
+import { Upload, Loader2, AlertCircle, Download } from 'lucide-react'
 import { api } from '../lib/api'
 
 interface ColumnMapping {
@@ -16,13 +16,10 @@ interface PredictionResult {
 }
 
 export default function BatchPredictPage() {
-  const [csvData, setCsvData] = useState<any[]>([])
-  const [columnMappings, setColumnMappings] = useState<ColumnMapping[]>([])
   const [predictions, setPredictions] = useState<PredictionResult[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [step, setStep] = useState<'upload' | 'mapping' | 'results'>('upload')
-  const [availableFeatures, setAvailableFeatures] = useState<string[]>([])
+  const [step, setStep] = useState<'upload' | 'results'>('upload')
   const [models, setModels] = useState<any[]>([])
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null)
 
@@ -49,11 +46,23 @@ export default function BatchPredictPage() {
     try {
       // Read CSV file
       const text = await uploadedFile.text()
-      const lines = text.split('\n').filter(line => line.trim())
       
-      // Parse CSV (simple parsing - assumes comma-separated)
-      const headers = lines[0].split(',').map(h => h.trim())
-      const data = lines.slice(1).map(line => {
+      // Find the first non-comment line for headers
+      const lines = text.split('\n').filter(line => line.trim())
+      const headerIndex = lines.findIndex(line => !line.trim().startsWith('#'))
+      
+      if (headerIndex === -1) {
+        throw new Error('Could not find a valid header row in the CSV file.')
+      }
+      
+      // Remove BOM and parse headers
+      const headerLine = lines[headerIndex].replace(/^\uFEFF/, '')
+      const headers = headerLine.split(',').map(h => h.trim())
+      console.log('[Batch Upload] CSV Headers:', headers)
+      
+      // Get data rows (all lines after the header)
+      const dataLines = lines.slice(headerIndex + 1)
+      const data = dataLines.map(line => {
         const values = line.split(',')
         const row: any = {}
         headers.forEach((header, idx) => {
@@ -62,91 +71,162 @@ export default function BatchPredictPage() {
         return row
       })
 
-      setCsvData(data)
-
       // Get available features from API
       const featuresResponse = await api.getFeatures()
       const allFeatures = Object.values(featuresResponse.features).flat()
-      setAvailableFeatures(allFeatures)
+      console.log('[Batch Upload] Expected Features:', allFeatures)
 
-      // Auto-map columns that match feature names
+      // Auto-map columns that match feature names (improved matching algorithm)
       const mappings: ColumnMapping[] = headers.map(col => {
-        const matchedFeature = allFeatures.find(f => 
-          f.toLowerCase() === col.toLowerCase() || 
-          col.toLowerCase().includes(f.toLowerCase())
-        )
+        const colLower = col.toLowerCase().trim()
+        
+        // Skip error/uncertainty columns (they contain _err, _unc, etc.)
+        if (colLower.includes('_err') || colLower.includes('_unc') || colLower.includes('error')) {
+          return {
+            csvColumn: col,
+            featureName: '',
+            mapped: false
+          }
+        }
+        
+        // Try exact match first (highest priority)
+        let matchedFeature = allFeatures.find(f => f.toLowerCase() === colLower)
+        
+        // Only try fuzzy matching if no exact match found
+        if (!matchedFeature) {
+          // Try if column contains feature name
+          matchedFeature = allFeatures.find(f => colLower.includes(f.toLowerCase()))
+          
+          // Try if feature name contains column (reversed)
+          if (!matchedFeature) {
+            matchedFeature = allFeatures.find(f => f.toLowerCase().includes(colLower))
+          }
+          
+          // Try common variations (remove underscores, spaces, etc.)
+          if (!matchedFeature) {
+            const colNormalized = colLower.replace(/[_\s-]/g, '')
+            matchedFeature = allFeatures.find(f => {
+              const featureNormalized = f.toLowerCase().replace(/[_\s-]/g, '')
+              return featureNormalized === colNormalized || 
+                     colNormalized.includes(featureNormalized) ||
+                     featureNormalized.includes(colNormalized)
+            })
+          }
+        }
+        
         return {
           csvColumn: col,
           featureName: matchedFeature || '',
           mapped: !!matchedFeature
         }
       })
-
-      setColumnMappings(mappings)
-      setStep('mapping')
+      
+      // Count how many features were successfully mapped
+      const mappedCount = mappings.filter(m => m.mapped).length
+      const totalFeaturesNeeded = allFeatures.length
+      const mappedFeatures = new Set(mappings.filter(m => m.mapped).map(m => m.featureName))
+      
+      console.log(`[Batch Upload] Mapped ${mappedCount} of ${headers.length} CSV columns`)
+      console.log(`[Batch Upload] Covered ${mappedFeatures.size} of ${totalFeaturesNeeded} required model features`)
+      console.log('[Batch Upload] Mappings:', mappings.filter(m => m.mapped))
+      
+      // Warn if too few features were mapped (less than 25% of required features)
+      const coveragePercent = (mappedFeatures.size / totalFeaturesNeeded) * 100
+      if (mappedFeatures.size < 5) {
+        throw new Error(
+          `Only ${mappedFeatures.size} of ${totalFeaturesNeeded} model features found in CSV (${coveragePercent.toFixed(0)}% coverage). ` +
+          `Please ensure your CSV has columns matching: ${allFeatures.slice(0, 10).join(', ')}...`
+        )
+      }
+      
+      if (coveragePercent < 50) {
+        console.warn(`[Batch Upload] Warning: Only ${coveragePercent.toFixed(0)}% of features mapped. Predictions may be less accurate.`)
+      }
+      
+      // Automatically run predictions without requiring user interaction
+      await runPredictions(data, mappings, allFeatures)
     } catch (err) {
-      setError('Failed to parse CSV file')
+      console.error('[Batch Upload] Error:', err)
+      setError(err instanceof Error ? err.message : 'Failed to parse CSV file or run predictions')
     } finally {
       setLoading(false)
     }
   }
 
-  const updateMapping = (csvColumn: string, featureName: string) => {
-    setColumnMappings(prev => prev.map(m => 
-      m.csvColumn === csvColumn 
-        ? { ...m, featureName, mapped: !!featureName }
-        : m
-    ))
-  }
-
-  const handlePredict = async () => {
-    setLoading(true)
-    setError(null)
-
+  const runPredictions = async (data: any[], mappings: ColumnMapping[], features: string[]) => {
     try {
-      const results: PredictionResult[] = []
-
-      // Process each row
-      for (let i = 0; i < csvData.length; i++) {
-        const row = csvData[i]
+      // Prepare all records for batch prediction
+      const records: Record<string, number>[] = []
+      
+      for (let i = 0; i < data.length; i++) {
+        const row = data[i]
         
         // Map CSV columns to features
-        const features: Record<string, number> = {}
-        columnMappings.forEach(mapping => {
+        const featureValues: Record<string, number> = {}
+        let nonZeroCount = 0
+        
+        mappings.forEach(mapping => {
           if (mapping.mapped && mapping.featureName) {
             const value = parseFloat(row[mapping.csvColumn])
-            features[mapping.featureName] = isNaN(value) ? 0 : value
+            const finalValue = isNaN(value) ? 0 : value
+            featureValues[mapping.featureName] = finalValue
+            if (finalValue !== 0) nonZeroCount++
           }
         })
 
         // Fill missing features with 0
-        availableFeatures.forEach(feature => {
-          if (!(feature in features)) {
-            features[feature] = 0
+        features.forEach(feature => {
+          if (!(feature in featureValues)) {
+            featureValues[feature] = 0
           }
         })
-
-        // Make prediction with selected model
-        const prediction = await api.predict({ 
-          features,
-          model_id: selectedModelId || undefined
-        })
         
-        results.push({
-          row: i + 1,
-          ...row,
-          prediction: prediction.prediction,
-          confidence: prediction.confidence,
-          probabilities: prediction.probabilities
-        })
+        // Log first few rows for debugging
+        if (i < 3) {
+          console.log(`[Batch Upload] Row ${i + 1} feature values:`, featureValues)
+          console.log(`[Batch Upload] Row ${i + 1} non-zero features: ${nonZeroCount}`)
+          console.log(`[Batch Upload] Row ${i + 1} original data:`, row)
+        }
+        
+        records.push(featureValues)
+      }
+
+      console.log(`[Batch Upload] Sending ${records.length} records for batch prediction`)
+      
+      // Make batch prediction (single API call for all rows!)
+      const batchResponse = await api.batchPredict({ records })
+      
+      console.log(`[Batch Upload] Received ${batchResponse.predictions.length} predictions`)
+      
+      // Combine predictions with original data
+      const results: PredictionResult[] = batchResponse.predictions.map((pred, i) => ({
+        row: i + 1,
+        ...data[i],
+        prediction: pred.prediction,
+        confidence: pred.confidence,
+        probabilities: pred.probabilities
+      }))
+      
+      // Compare with actual dispositions if available
+      if (data[0] && 'koi_disposition' in data[0]) {
+        const actualCounts = {
+          'CONFIRMED': data.filter(row => row.koi_disposition === 'CONFIRMED').length,
+          'CANDIDATE': data.filter(row => row.koi_disposition === 'CANDIDATE').length,
+          'FALSE POSITIVE': data.filter(row => row.koi_disposition === 'FALSE POSITIVE').length
+        }
+        const predictedCounts = {
+          'CONFIRMED': results.filter(r => r.prediction === 'CONFIRMED').length,
+          'CANDIDATE': results.filter(r => r.prediction === 'CANDIDATE').length,
+          'FALSE POSITIVE': results.filter(r => r.prediction === 'FALSE POSITIVE').length
+        }
+        console.log('[Batch Upload] Actual dispositions in dataset:', actualCounts)
+        console.log('[Batch Upload] Model predictions:', predictedCounts)
       }
 
       setPredictions(results)
       setStep('results')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Prediction failed')
-    } finally {
-      setLoading(false)
+      throw err
     }
   }
 
@@ -234,83 +314,31 @@ export default function BatchPredictPage() {
             <p className="text-slate-300 mb-4">
               Drop your CSV file here or click to browse
             </p>
+            <p className="text-sm text-slate-400 mb-4">
+              Your file will be automatically processed and predictions will be generated
+            </p>
             <input
               type="file"
               accept=".csv"
               onChange={handleFileUpload}
               className="hidden"
               id="csv-upload"
+              disabled={loading}
             />
-            <label htmlFor="csv-upload" className="btn-primary cursor-pointer inline-block">
-              Select CSV File
+            <label htmlFor="csv-upload" className={`btn-primary cursor-pointer inline-block ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}>
+              {loading ? (
+                <span className="flex items-center gap-2">
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  Processing...
+                </span>
+              ) : (
+                'Select CSV File'
+              )}
             </label>
           </div>
         </div>
       )}
 
-      {/* Step 2: Column Mapping */}
-      {step === 'mapping' && (
-        <div className="space-y-4">
-          <div className="card">
-            <h3 className="text-xl font-semibold mb-4">Map CSV Columns to Features</h3>
-            <p className="text-sm text-slate-400 mb-4">
-              {columnMappings.filter(m => m.mapped).length} of {columnMappings.length} columns mapped
-            </p>
-            
-            <div className="space-y-3 max-h-96 overflow-y-auto">
-              {columnMappings.map(mapping => (
-                <div key={mapping.csvColumn} className="flex items-center gap-4 p-3 bg-slate-800 rounded">
-                  <div className="flex-1">
-                    <p className="font-medium">{mapping.csvColumn}</p>
-                    <p className="text-xs text-slate-500">CSV Column</p>
-                  </div>
-                  <div className="flex-1">
-                    <select
-                      value={mapping.featureName}
-                      onChange={(e) => updateMapping(mapping.csvColumn, e.target.value)}
-                      className="input-field w-full"
-                    >
-                      <option value="">-- Skip this column --</option>
-                      {availableFeatures.map(feature => (
-                        <option key={feature} value={feature}>{feature}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    {mapping.mapped ? (
-                      <CheckCircle className="w-5 h-5 text-green-400" />
-                    ) : (
-                      <div className="w-5 h-5 border-2 border-slate-600 rounded-full" />
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="flex gap-3">
-            <button onClick={() => setStep('upload')} className="btn-secondary">
-              Back
-            </button>
-            <button
-              onClick={handlePredict}
-              disabled={loading || columnMappings.filter(m => m.mapped).length === 0}
-              className="btn-primary flex items-center gap-2"
-            >
-              {loading ? (
-                <>
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                  Processing {csvData.length} rows...
-                </>
-              ) : (
-                <>
-                  Run Predictions ({csvData.length} rows)
-                </>
-              )}
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* Step 3: Results */}
       {step === 'results' && predictions.length > 0 && (

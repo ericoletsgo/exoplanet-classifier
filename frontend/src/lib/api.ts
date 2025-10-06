@@ -18,6 +18,14 @@ export interface PredictionResponse {
   prediction_class: number
 }
 
+export interface BatchPredictionRequest {
+  records: Record<string, number>[]
+}
+
+export interface BatchPredictionResponse {
+  predictions: PredictionResponse[]
+}
+
 export interface MetricsResponse {
   accuracy: number
   precision: number
@@ -146,6 +154,13 @@ class APIClient {
     return this.request<PredictionResponse>('/predict-raw', {
       method: 'POST',
       body: JSON.stringify(rawRowData),
+    })
+  }
+
+  async batchPredict(data: BatchPredictionRequest) {
+    return this.request<BatchPredictionResponse>('/batch-predict', {
+      method: 'POST',
+      body: JSON.stringify(data),
     })
   }
 
