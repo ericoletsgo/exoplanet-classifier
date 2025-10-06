@@ -160,7 +160,7 @@ export default function PredictPage() {
         </div>
       </div>
 
-      {/* Model Selection */}
+      {/* 1. Model Selection */}
       {models.length > 0 && (
         <div className="card">
           <h3 className="text-lg font-semibold mb-3">Select Model</h3>
@@ -195,7 +195,7 @@ export default function PredictPage() {
         </div>
       )}
 
-      {/* Random Example Buttons */}
+      {/* 2. Random Example Buttons */}
       <div className="card">
         <h3 className="text-lg font-semibold mb-4">Load Random Examples</h3>
         <div className="grid md:grid-cols-3 gap-3">
@@ -226,7 +226,7 @@ export default function PredictPage() {
         </p>
       </div>
 
-      {/* Random Example Information */}
+      {/* 3. Random Example Information */}
       {randomExampleData && (
         <div className="card bg-slate-800/50 border-slate-600">
           <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
@@ -251,6 +251,74 @@ export default function PredictPage() {
         </div>
       )}
 
+      {/* 4. Feature Input Form */}
+      <div className="card">
+        <h3 className="text-lg font-semibold mb-4">Feature Parameters</h3>
+        <div className="flex gap-2 mb-6 border-b border-slate-700 overflow-x-auto">
+          {Object.keys(features.features).map((category) => (
+            <button
+              key={category}
+              onClick={() => setActiveCategory(category)}
+              className={`px-4 py-2 font-medium transition-colors whitespace-nowrap ${
+                activeCategory === category
+                  ? 'text-primary-400 border-b-2 border-primary-400'
+                  : 'text-slate-400 hover:text-slate-300'
+              }`}
+            >
+              {category.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')}
+            </button>
+          ))}
+        </div>
+
+        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-96 overflow-y-auto pr-2">
+          {features.features[activeCategory].map((feature) => (
+            <div key={feature} className="flex flex-col">
+              <label 
+                className="block text-sm font-medium text-slate-300 mb-1 cursor-help" 
+                title={features.descriptions?.[feature] || ''}
+              >
+                {features.labels?.[feature] || feature}
+              </label>
+              <div className="flex-grow">
+                <input
+                  type="number"
+                  step="any"
+                  value={formData[feature] || 0}
+                  onChange={(e) => handleInputChange(feature, e.target.value)}
+                  className="input-field w-full"
+                  placeholder="0.0"
+                />
+              </div>
+              {features.descriptions?.[feature] && (
+                <p className="text-xs text-slate-500 mt-1 min-h-[2.5rem]">
+                  {features.descriptions[feature]}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-6 pt-6 border-t border-slate-700">
+          <button
+            onClick={handlePredict}
+            disabled={loading}
+            className="btn-primary w-full flex items-center justify-center gap-2"
+          >
+            {loading ? (
+              <>
+                <Loader2 className="w-5 h-5 animate-spin" />
+                Predicting...
+              </>
+            ) : (
+              <>
+                <Target className="w-5 h-5" />
+                Predict
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+
       {error && (
         <div className="card bg-red-900/20 border-red-700">
           <div className="flex items-center gap-2 text-red-400">
@@ -260,7 +328,7 @@ export default function PredictPage() {
         </div>
       )}
 
-      {/* Prediction Result */}
+      {/* 5. Prediction Result */}
       {prediction && (
         <div className="card bg-gradient-to-br from-primary-900/30 to-slate-800 border-primary-700">
           <h3 className="text-xl font-semibold mb-4">Prediction Result</h3>
@@ -338,73 +406,6 @@ export default function PredictPage() {
           )}
         </div>
       )}
-
-      {/* Feature Input Form */}
-      <div className="card">
-        <div className="flex gap-2 mb-6 border-b border-slate-700 overflow-x-auto">
-          {Object.keys(features.features).map((category) => (
-            <button
-              key={category}
-              onClick={() => setActiveCategory(category)}
-              className={`px-4 py-2 font-medium transition-colors whitespace-nowrap ${
-                activeCategory === category
-                  ? 'text-primary-400 border-b-2 border-primary-400'
-                  : 'text-slate-400 hover:text-slate-300'
-              }`}
-            >
-              {category.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')}
-            </button>
-          ))}
-        </div>
-
-        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-96 overflow-y-auto pr-2">
-          {features.features[activeCategory].map((feature) => (
-            <div key={feature} className="flex flex-col">
-              <label 
-                className="block text-sm font-medium text-slate-300 mb-1 cursor-help" 
-                title={features.descriptions?.[feature] || ''}
-              >
-                {features.labels?.[feature] || feature}
-              </label>
-              <div className="flex-grow">
-                <input
-                  type="number"
-                  step="any"
-                  value={formData[feature] || 0}
-                  onChange={(e) => handleInputChange(feature, e.target.value)}
-                  className="input-field w-full"
-                  placeholder="0.0"
-                />
-              </div>
-              {features.descriptions?.[feature] && (
-                <p className="text-xs text-slate-500 mt-1 min-h-[2.5rem]">
-                  {features.descriptions[feature]}
-                </p>
-              )}
-            </div>
-          ))}
-        </div>
-
-        <div className="mt-6 pt-6 border-t border-slate-700">
-          <button
-            onClick={handlePredict}
-            disabled={loading}
-            className="btn-primary w-full flex items-center justify-center gap-2"
-          >
-            {loading ? (
-              <>
-                <Loader2 className="w-5 h-5 animate-spin" />
-                Predicting...
-              </>
-            ) : (
-              <>
-                <Target className="w-5 h-5" />
-                Predict
-              </>
-            )}
-          </button>
-        </div>
-      </div>
     </div>
   )
 }

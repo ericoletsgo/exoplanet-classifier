@@ -35,7 +35,7 @@ app.add_middleware(
 # Constants
 # Get the parent directory (project root) to find model files
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODEL_PATH = os.path.join(BASE_DIR, "properly_trained_model.joblib")
+MODEL_PATH = os.path.join(BASE_DIR, "balanced_model_20251005_115605.joblib")
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 MODELS_METADATA_FILE = os.path.join(BASE_DIR, "models", "models_metadata.json")
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -233,64 +233,63 @@ class DatasetResponse(BaseModel):
     total_pages: int
 
 # Global model cache
-_model_cache = None
-
-def load_model():
-    """Load the trained model"""
-    global _model_cache
-    if _model_cache is None:
-        print(f"[DEBUG] Model path: {MODEL_PATH}")
-        print(f"[DEBUG] Model exists: {os.path.exists(MODEL_PATH)}")
-        print(f"[DEBUG] Current working directory: {os.getcwd()}")
-        print(f"[DEBUG] Files in current dir: {os.listdir('.')}")
-        print(f"[DEBUG] BASE_DIR: {BASE_DIR}")
-        print(f"[DEBUG] Files in BASE_DIR: {os.listdir(BASE_DIR) if os.path.exists(BASE_DIR) else 'BASE_DIR not found'}")
-        
-        # Try multiple possible model locations
-        possible_paths = [
-            MODEL_PATH,
-            os.path.join(BASE_DIR, "balanced_model_20251005_115605.joblib"),
-            os.path.join(os.getcwd(), "properly_trained_model.joblib"),
-            os.path.join(os.getcwd(), "balanced_model_20251005_115605.joblib"),
-            "/app/properly_trained_model.joblib",
-            "/app/balanced_model_20251005_115605.joblib"
-        ]
-        
-        model_path_to_use = None
-        for path in possible_paths:
-            if os.path.exists(path):
-                print(f"[INFO] Found model at: {path}")
-                model_path_to_use = path
-                break
-        
-        if not model_path_to_use:
-            print(f"[ERROR] Model not found in any of these locations:")
-            for path in possible_paths:
-                print(f"  - {path}")
-            raise HTTPException(status_code=404, detail=f"Model file not found. Checked: {possible_paths}")
-        
-        try:
-            print(f"[INFO] Loading model from {model_path_to_use}")
-            _model_cache = joblib.load(model_path_to_use)
-            print(f"[INFO] Model loaded successfully: {type(_model_cache).__name__}")
-        except Exception as e:
-            print(f"[ERROR] Failed to load model: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Model loading failed: {str(e)}")
-    
-    return _model_cache
-
-def get_model():
-    """Get the loaded model, loading it if necessary"""
-    return load_model()
+model = None
 
 @app.on_event("startup")
 def load_model_on_startup():
     """Load the trained model at application startup"""
+    global model
+    print(f"[DEBUG] Model path: {MODEL_PATH}")
+    print(f"[DEBUG] Model exists: {os.path.exists(MODEL_PATH)}")
+    print(f"[DEBUG] Current working directory: {os.getcwd()}")
+    print(f"[DEBUG] Files in current dir: {os.listdir('.')}")
+    print(f"[DEBUG] BASE_DIR: {BASE_DIR}")
+    print(f"[DEBUG] Files in BASE_DIR: {os.listdir(BASE_DIR) if os.path.exists(BASE_DIR) else 'BASE_DIR not found'}")
+    
+    # Try multiple possible model locations
+    possible_paths = [
+        MODEL_PATH,
+        os.path.join(BASE_DIR, "balanced_model_20251005_115605.joblib"),
+        os.path.join(os.getcwd(), "properly_trained_model.joblib"),
+        os.path.join(os.getcwd(), "balanced_model_20251005_115605.joblib"),
+        "/app/properly_trained_model.joblib",
+        "/app/balanced_model_20251005_115605.joblib"
+    ]
+    
+    model_path_to_use = None
+    for path in possible_paths:
+        if os.path.exists(path):
+            print(f"[INFO] Found model at: {path}")
+            model_path_to_use = path
+            break
+    
+    if not model_path_to_use:
+        print(f"[ERROR] Model file not found in any of these locations:")
+        for path in possible_paths:
+            print(f"  - {path}")
+        print(f"[ERROR] Model will not be available for predictions")
+        model = None
+        return
+    
     try:
-        load_model()
+        print(f"[INFO] Loading model from {model_path_to_use}")
+        model = joblib.load(model_path_to_use)
+        print(f"[INFO] Model loaded successfully: {type(model).__name__}")
         print("[INFO] Model loaded successfully at startup")
     except Exception as e:
-        print(f"[ERROR] Failed to load model at startup: {str(e)}")
+        print(f"[ERROR] Failed to load model: {str(e)}")
+        print(f"[ERROR] Model will not be available for predictions")
+        model = None
+
+def get_model():
+    """Get the loaded model, raising an error if it's not available"""
+    if model is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Model is not loaded. Check server logs for errors."
+        )
+    return model
+
 
 def get_feature_names(model):
     """Extract feature names from model"""
@@ -321,7 +320,7 @@ async def root():
     """Health check endpoint"""
     model_status = "unknown"
     try:
-        load_model()
+        get_model()
         model_status = "loaded"
     except Exception as e:
         model_status = f"error: {str(e)}"
@@ -1331,7 +1330,7 @@ async def get_feature_correlations():
         df = pd.read_csv(koi_path, comment='#')
         
         # Get the relevant features used by the model
-        model = load_model()
+        model = get_model()
         feature_names = get_feature_names(model)
         
         # Filter to only features that exist in the dataset
