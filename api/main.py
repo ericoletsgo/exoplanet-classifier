@@ -153,6 +153,7 @@ def get_all_relevant_features():
 # Pydantic models
 class PredictionRequest(BaseModel):
     features: Dict[str, float] = Field(..., description="Feature values for prediction")
+    model_id: Optional[str] = Field(default=None, description="Specific model ID to use for prediction")
 
 class PredictionResponse(BaseModel):
     prediction: str
@@ -196,7 +197,7 @@ class Hyperparameters(BaseModel):
     lgb_num_leaves: int = Field(default=31, ge=10, le=100, description="Maximum number of leaves in one tree")
 
 class TrainingRequest(BaseModel):
-    dataset: str = Field(default="koi.csv", description="Dataset to train on (koi.csv, k2.csv, toi.csv, or 'combined' for all datasets)")
+    dataset: str = Field(default="koi.csv", description="Dataset to train on (koi.csv, k2.csv, or 'combined' for KOI+K2)")
     model_name: str = Field(default="New Model", description="Name for the trained model")
     description: str = Field(default="", description="Description of the model")
     test_size: float = Field(default=0.2, description="Test set size (0.1-0.5)")
@@ -204,7 +205,9 @@ class TrainingRequest(BaseModel):
     hyperparameters: Optional[Hyperparameters] = Field(default=None, description="Algorithm-specific hyperparameters")
     use_hyperparameter_tuning: bool = Field(default=False, description="Enable hyperparameter tuning with grid search")
     include_k2: bool = Field(default=False, description="Include K2 dataset in combined training")
-    include_toi: bool = Field(default=False, description="Include TOI dataset in combined training")
+    target_column: Optional[str] = Field(default=None, description="Target column name (auto-detected if not specified)")
+    target_mapping: Optional[Dict[str, int]] = Field(default=None, description="Custom mapping of target values to classes (0, 1, 2)")
+    csv_data: Optional[str] = Field(default=None, description="CSV file content as string (for uploaded files)")
 
 class TrainingResponse(BaseModel):
     status: str
@@ -294,7 +297,15 @@ async def get_features():
 async def predict(request: PredictionRequest):
     """Make a prediction using the trained model"""
     try:
-        model = load_model()
+        # Load specific model if model_id provided, otherwise use default
+        if request.model_id:
+            model_path = os.path.join(MODELS_DIR, f"{request.model_id}.joblib")
+            if not os.path.exists(model_path):
+                raise HTTPException(status_code=404, detail=f"Model {request.model_id} not found")
+            model = joblib.load(model_path)
+        else:
+            model = load_model()
+        
         feature_names = get_feature_names(model)
         
         # Create feature vector in correct order
@@ -491,7 +502,43 @@ async def train_advanced_ensemble(request: TrainingRequest, background_tasks: Ba
     """Advanced ensemble training matching Streamlit functionality"""
     try:
         # Load the dataset(s)
-        if request.dataset == "combined":
+        if request.csv_data:
+            # Handle uploaded CSV data
+            print(f"[INFO] Loading uploaded CSV data")
+            from io import StringIO
+            df = pd.read_csv(StringIO(request.csv_data), comment='#')
+            print(f"[INFO] CSV loaded: {len(df)} samples")
+            
+            # Determine target column
+            if request.target_column:
+                disposition_col = request.target_column
+                if disposition_col not in df.columns:
+                    raise HTTPException(status_code=400, detail=f"Target column '{disposition_col}' not found in CSV")
+            else:
+                # Auto-detect disposition column
+                disposition_col = None
+                if 'koi_disposition' in df.columns:
+                    disposition_col = 'koi_disposition'
+                elif 'disposition' in df.columns:
+                    disposition_col = 'disposition'
+                else:
+                    raise HTTPException(status_code=400, detail="No disposition column found in CSV. Please specify target_column.")
+            
+            print(f"[INFO] Using target column: {disposition_col}")
+            print(f"[INFO] Target distribution: {df[disposition_col].value_counts().to_dict()}")
+            
+            # Use custom mapping if provided, otherwise use default
+            if request.target_mapping:
+                df['target'] = df[disposition_col].map(request.target_mapping)
+            else:
+                df['target'] = df[disposition_col].map({'CONFIRMED': 2, 'CANDIDATE': 1, 'FALSE POSITIVE': 0})
+            
+            df = df[df['target'].notna()]
+            df['dataset_source'] = 'uploaded_csv'
+            
+            print(f"[INFO] Valid samples after filtering: {len(df)}")
+            
+        elif request.dataset == "combined":
             # Load multiple datasets and combine them
             datasets = []
             dataset_info = []
@@ -517,18 +564,6 @@ async def train_advanced_ensemble(request: TrainingRequest, background_tasks: Ba
                     datasets.append(k2_df)
                     dataset_info.append(f"K2: {len(k2_df)} samples")
             
-            # Include TOI if requested
-            if request.include_toi:
-                toi_path = os.path.join(DATA_DIR, "toi.csv")
-                if os.path.exists(toi_path):
-                    toi_df = pd.read_csv(toi_path, comment='#')
-                    # TOI uses different disposition mapping - convert to standard format
-                    toi_df['target'] = toi_df['koi_disposition'].map({'CONFIRMED': 2, 'CANDIDATE': 1, 'FALSE POSITIVE': 0})
-                    toi_df = toi_df[toi_df['target'].notna()]
-                    toi_df['dataset_source'] = 'toi'
-                    datasets.append(toi_df)
-                    dataset_info.append(f"TOI: {len(toi_df)} samples")
-            
             if len(datasets) == 0:
                 raise HTTPException(status_code=404, detail="No datasets found for combined training")
             
@@ -542,18 +577,61 @@ async def train_advanced_ensemble(request: TrainingRequest, background_tasks: Ba
             if not os.path.exists(dataset_path):
                 raise HTTPException(status_code=404, detail=f"Dataset not found: {request.dataset}")
             
+            print(f"[INFO] Loading dataset: {request.dataset}")
             df = pd.read_csv(dataset_path, comment='#')
-            df['target'] = df['koi_disposition'].map({'CONFIRMED': 2, 'CANDIDATE': 1, 'FALSE POSITIVE': 0})
+            
+            # Determine which disposition column to use
+            if request.target_column:
+                disposition_col = request.target_column
+                if disposition_col not in df.columns:
+                    raise HTTPException(status_code=400, detail=f"Target column '{disposition_col}' not found in dataset")
+            else:
+                # Auto-detect disposition column
+                disposition_col = None
+                if 'koi_disposition' in df.columns:
+                    disposition_col = 'koi_disposition'
+                elif 'disposition' in df.columns:
+                    disposition_col = 'disposition'
+                else:
+                    raise HTTPException(status_code=400, detail="No disposition column found in dataset. Please specify target_column.")
+            
+            print(f"[INFO] Dataset loaded: {len(df)} samples with target distribution:")
+            print(df[disposition_col].value_counts().to_dict())
+            
+            # Use custom mapping if provided, otherwise use default
+            if request.target_mapping:
+                df['target'] = df[disposition_col].map(request.target_mapping)
+            else:
+                df['target'] = df[disposition_col].map({'CONFIRMED': 2, 'CANDIDATE': 1, 'FALSE POSITIVE': 0})
+            
             df = df[df['target'].notna()]
             df['dataset_source'] = request.dataset.replace('.csv', '')
+            
+            print(f"[INFO] Valid samples after filtering: {len(df)}")
         
         # Get numeric features (same approach as Streamlit)
         numeric_features = df.select_dtypes(include=[np.number]).columns.tolist()
         if 'target' in numeric_features:
             numeric_features.remove('target')
         
-        # Prepare features and target
-        X = df[numeric_features].fillna(0)
+        print(f"[INFO] Using {len(numeric_features)} numeric features")
+        
+        # Prepare features and target (same NaN handling as Streamlit)
+        X = df[numeric_features].copy()
+        
+        # Fill NaN values properly (matching Streamlit logic)
+        for col in X.columns:
+            if X[col].isna().any():
+                median_val = X[col].median()
+                if pd.isna(median_val):
+                    X[col] = X[col].fillna(0)
+                else:
+                    X[col] = X[col].fillna(median_val)
+        
+        # Final check (matching Streamlit)
+        if X.isna().any().any():
+            X = X.fillna(0)
+        
         y = df['target']
         
         # Split data with configurable test size
@@ -633,6 +711,8 @@ async def train_advanced_ensemble(request: TrainingRequest, background_tasks: Ba
         # Create ensemble (same as Streamlit)
         ensemble = VotingClassifier(models, voting='soft')
         
+        print(f"[INFO] Training ensemble with {len(models)} algorithms: {algorithms_used}")
+        
         # Hyperparameter tuning with grid search if enabled
         if request.use_hyperparameter_tuning:
             print("[INFO] Starting hyperparameter tuning with grid search...")
@@ -690,20 +770,33 @@ async def train_advanced_ensemble(request: TrainingRequest, background_tasks: Ba
             # Train the model normally
             ensemble.fit(X_train, y_train)
         
-        # Cross-validation accuracy (same as Streamlit)
-        from sklearn.model_selection import cross_val_score
-        cv_scores = cross_val_score(ensemble, X_train, y_train, cv=3, scoring='accuracy')
-        cv_accuracy = cv_scores.mean()
+        # Evaluate on train and test sets (matching Streamlit)
+        from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
         
-        # Test set evaluation
-        from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-        y_pred = ensemble.predict(X_test)
+        y_pred_train = ensemble.predict(X_train)
+        y_pred_test = ensemble.predict(X_test)
+        
+        train_accuracy = accuracy_score(y_train, y_pred_train)
+        test_accuracy = accuracy_score(y_test, y_pred_test)
+        
+        # Calculate additional metrics (matching Streamlit)
+        precision = precision_score(y_test, y_pred_test, average='weighted', zero_division=0)
+        recall = recall_score(y_test, y_pred_test, average='weighted', zero_division=0)
+        f1 = f1_score(y_test, y_pred_test, average='weighted', zero_division=0)
+        
+        # Get confusion matrix (matching Streamlit)
+        cm = confusion_matrix(y_test, y_pred_test)
+        
+        print(f"[INFO] Training complete - Train Accuracy: {train_accuracy:.2%}, Test Accuracy: {test_accuracy:.2%}")
         
         metrics = {
-            'accuracy': float(accuracy_score(y_test, y_pred)),
-            'precision': float(precision_score(y_test, y_pred, average='weighted', zero_division=0)),
-            'recall': float(recall_score(y_test, y_pred, average='weighted', zero_division=0)),
-            'f1_score': float(f1_score(y_test, y_pred, average='weighted', zero_division=0)),
+            'train_accuracy': float(train_accuracy),
+            'test_accuracy': float(test_accuracy),
+            'accuracy': float(test_accuracy),  # For backward compatibility
+            'precision': float(precision),
+            'recall': float(recall),
+            'f1_score': float(f1),
+            'confusion_matrix': cm.tolist(),
             'train_samples': len(X_train),
             'test_samples': len(X_test),
             'n_features': len(numeric_features)
@@ -716,15 +809,25 @@ async def train_advanced_ensemble(request: TrainingRequest, background_tasks: Ba
         model_path = os.path.join(MODELS_DIR, f"{model_id}.joblib")
         os.makedirs(MODELS_DIR, exist_ok=True)
         
-        # Store metadata (same as Streamlit)
-        ensemble.model_id = model_id
-        ensemble.model_name = request.model_name
-        ensemble.description = request.description
-        ensemble.cv_accuracy = cv_accuracy
+        # Store metadata in model (matching Streamlit exactly)
         ensemble.feature_names = numeric_features
-        ensemble.dataset_summary = {'total_samples': len(X)}
-        ensemble.algorithms_used = algorithms_used
-        ensemble.created_at = datetime.now().isoformat()
+        ensemble.metadata = {
+            'id': model_id,
+            'name': request.model_name,
+            'description': request.description,
+            'created_at': datetime.now().isoformat(),
+            'train_samples': len(X_train),
+            'test_samples': len(X_test),
+            'train_accuracy': float(train_accuracy),
+            'test_accuracy': float(test_accuracy),
+            'precision': float(precision),
+            'recall': float(recall),
+            'f1_score': float(f1),
+            'confusion_matrix': cm.tolist(),
+            'features': numeric_features,
+            'n_features': len(numeric_features),
+            'algorithms': algorithms_used
+        }
         
         joblib.dump(ensemble, model_path)
         
@@ -736,20 +839,23 @@ async def train_advanced_ensemble(request: TrainingRequest, background_tasks: Ba
         else:
             metadata = []
         
+        # Create metadata for JSON file (matching Streamlit structure)
         model_metadata = {
             'id': model_id,
             'name': request.model_name,
             'description': request.description,
-            'created_at': ensemble.created_at,
-            'train_accuracy': cv_accuracy,  # Cross-validation accuracy
-            'test_accuracy': metrics['accuracy'],
-            'precision': metrics['precision'],
-            'recall': metrics['recall'],
-            'f1_score': metrics['f1_score'],
-            'algorithms': algorithms_used,
-            'n_features': len(numeric_features),
+            'created_at': ensemble.metadata['created_at'],
             'train_samples': len(X_train),
             'test_samples': len(X_test),
+            'train_accuracy': float(train_accuracy),
+            'test_accuracy': float(test_accuracy),
+            'precision': float(precision),
+            'recall': float(recall),
+            'f1_score': float(f1),
+            'confusion_matrix': cm.tolist(),
+            'features': numeric_features,
+            'n_features': len(numeric_features),
+            'algorithms': algorithms_used,
             'model_path': model_path
         }
         
@@ -767,11 +873,11 @@ async def train_advanced_ensemble(request: TrainingRequest, background_tasks: Ba
         
         return TrainingResponse(
             status="completed",
-            message=f"🎯 Ensemble trained successfully! CV Accuracy: {cv_accuracy:.1%}, Test Accuracy: {metrics['accuracy']:.1%}",
+            message=f"✅ Model trained successfully! Train Accuracy: {train_accuracy:.1%}, Test Accuracy: {test_accuracy:.1%}",
             model_id=model_id,
             metrics=metrics,
             algorithms_used=algorithms_used,
-            cv_accuracy=cv_accuracy,
+            cv_accuracy=float(train_accuracy),  # Use train accuracy for consistency
             dataset_summary=dataset_summary
         )
         
@@ -974,6 +1080,99 @@ async def list_models():
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list models: {str(e)}")
+
+@app.options("/models/{model_id}/evaluate")
+@app.get("/models/{model_id}/evaluate")
+async def evaluate_model(model_id: str):
+    """Evaluate a specific model and return detailed metrics"""
+    try:
+        # Load the model
+        model_path = os.path.join(MODELS_DIR, f"{model_id}.joblib")
+        if not os.path.exists(model_path):
+            raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
+        
+        model = joblib.load(model_path)
+        
+        # Get model metadata
+        if not hasattr(model, 'metadata'):
+            raise HTTPException(status_code=400, detail="Model does not have metadata")
+        
+        metadata = model.metadata
+        
+        # Return comprehensive evaluation
+        return {
+            "model_id": model_id,
+            "model_info": {
+                "name": metadata.get('name', 'Unknown'),
+                "description": metadata.get('description', ''),
+                "created_at": metadata.get('created_at', ''),
+                "algorithms": metadata.get('algorithms', []),
+                "n_features": metadata.get('n_features', 0)
+            },
+            "metrics": {
+                "train_accuracy": metadata.get('train_accuracy', 0),
+                "test_accuracy": metadata.get('test_accuracy', 0),
+                "precision": metadata.get('precision', 0),
+                "recall": metadata.get('recall', 0),
+                "f1_score": metadata.get('f1_score', 0)
+            },
+            "confusion_matrix": metadata.get('confusion_matrix', []),
+            "dataset_info": {
+                "train_samples": metadata.get('train_samples', 0),
+                "test_samples": metadata.get('test_samples', 0)
+            },
+            "features": metadata.get('features', [])
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to evaluate model: {str(e)}")
+
+@app.options("/datasets/{dataset_name}/columns")
+@app.get("/datasets/{dataset_name}/columns")
+async def get_dataset_columns(dataset_name: str):
+    """Get column names and sample values from a dataset"""
+    try:
+        # Validate dataset name
+        valid_datasets = ["koi", "k2", "toi"]
+        if dataset_name not in valid_datasets:
+            raise HTTPException(status_code=400, detail=f"Invalid dataset. Must be one of: {valid_datasets}")
+        
+        file_path = os.path.join(DATA_DIR, f"{dataset_name}.csv")
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail=f"Dataset file not found: {file_path}")
+        
+        # Load dataset
+        df = pd.read_csv(file_path, comment='#')
+        
+        # Get columns with their types and sample unique values
+        columns_info = []
+        for col in df.columns:
+            col_info = {
+                "name": col,
+                "type": str(df[col].dtype),
+                "non_null_count": int(df[col].notna().sum()),
+                "null_count": int(df[col].isna().sum())
+            }
+            
+            # Add unique values for categorical columns
+            if df[col].dtype == 'object' or df[col].nunique() < 20:
+                unique_vals = df[col].dropna().unique().tolist()[:10]
+                col_info["sample_values"] = [str(v) for v in unique_vals]
+                col_info["unique_count"] = int(df[col].nunique())
+            
+            columns_info.append(col_info)
+        
+        return {
+            "dataset": dataset_name,
+            "total_rows": len(df),
+            "total_columns": len(df.columns),
+            "columns": columns_info
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get dataset columns: {str(e)}")
 
 @app.options("/feature-correlations")
 @app.get("/feature-correlations")
