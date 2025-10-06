@@ -18,7 +18,7 @@ from sklearn.preprocessing import label_binarize
 app = FastAPI(
     title="Exoplanet Classifier API",
     description="REST API for exoplanet classification using machine learning",
-    version="1.0.4"  # Bumped to force new deployment with NaN handling fix
+    version="1.0.5"  # Bumped to force deployment with evaluate_model fix
 )
 
 # CORS middleware to allow frontend requests
@@ -1135,18 +1135,32 @@ async def list_models():
 async def evaluate_model(model_id: str):
     """Evaluate a specific model and return detailed metrics"""
     try:
-        # Load the model
+        # First try to load the model file
         model_path = os.path.join(MODELS_DIR, f"{model_id}.joblib")
-        if not os.path.exists(model_path):
-            raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
+        metadata = None
         
-        model = joblib.load(model_path)
+        if os.path.exists(model_path):
+            try:
+                model = joblib.load(model_path)
+                if hasattr(model, 'metadata'):
+                    metadata = model.metadata
+            except Exception as e:
+                print(f"[WARNING] Failed to load model {model_id}: {e}")
         
-        # Get model metadata
-        if not hasattr(model, 'metadata'):
-            raise HTTPException(status_code=400, detail="Model does not have metadata")
-        
-        metadata = model.metadata
+        # If no model file or metadata, try to get from models_metadata.json
+        if metadata is None:
+            if os.path.exists(MODELS_METADATA_FILE):
+                with open(MODELS_METADATA_FILE, 'r') as f:
+                    models_metadata = json.load(f)
+                
+                # Find the model in metadata
+                model_metadata = next((m for m in models_metadata if m.get('id') == model_id), None)
+                if model_metadata:
+                    metadata = model_metadata
+                else:
+                    raise HTTPException(status_code=404, detail=f"Model {model_id} not found in metadata")
+            else:
+                raise HTTPException(status_code=404, detail=f"Model {model_id} not found and no metadata file available")
         
         # Return comprehensive evaluation
         return {
