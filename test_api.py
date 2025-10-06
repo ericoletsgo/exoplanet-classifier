@@ -163,7 +163,7 @@ def test_performance():
                 print(f"🚀 {endpoint} is fast ({duration:.2f}s)")
 
 if __name__ == "__main__":
-    print("🧪 Exoplanet Classifier API Test Suite")
+    print("Exoplanet Classifier API Test Suite")
     print("Make sure your API is running on", BASE_URL)
     print()
     
