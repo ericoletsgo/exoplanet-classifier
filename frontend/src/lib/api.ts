@@ -153,24 +153,6 @@ class APIClient {
     }>(url)
   }
 
-  async getRandomExampleFromAllDatasets(disposition?: string) {
-    const params = new URLSearchParams()
-    if (disposition) {
-      params.append('disposition', disposition)
-    }
-    const queryString = params.toString()
-    const url = `/random-example${queryString ? `?${queryString}` : ''}`
-    return this.request<{
-      features: Record<string, number>
-      metadata: {
-        row_index: number
-        koi_name: string
-        expected_disposition: string
-        dataset: string
-      }
-      raw_row: Record<string, any>
-    }>(url)
-  }
 
   async getFeatureCorrelations() {
     return this.request<{
