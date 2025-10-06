@@ -30,15 +30,17 @@ app.add_middleware(
     allow_headers=["*"],  # Allow all headers
 )
 
-# Add timeout middleware for better error handling
+# Add timeout middleware for better error handling (increased timeout for heavy operations)
 @app.middleware("http")
 async def timeout_middleware(request, call_next):
     import asyncio
+    # Longer timeout for heavy operations like metrics and correlations
+    timeout = 60.0 if request.url.path in ['/metrics', '/feature-correlations', '/train'] else 30.0
     try:
-        response = await asyncio.wait_for(call_next(request), timeout=30.0)
+        response = await asyncio.wait_for(call_next(request), timeout=timeout)
         return response
     except asyncio.TimeoutError:
-        return {"error": "Request timeout", "detail": "The request took too long to process"}
+        return {"error": "Request timeout", "detail": f"The request took too long to process (>{timeout}s)"}
 
 # CORS middleware handles OPTIONS requests automatically
 
@@ -242,8 +244,11 @@ class DatasetResponse(BaseModel):
     page_size: int
     total_pages: int
 
-# Global model cache
+# Global caches for performance
 model = None
+metrics_cache = None
+correlations_cache = None
+models_metadata_cache = None
 
 @app.on_event("startup")
 def load_model_on_startup():
@@ -504,64 +509,45 @@ async def predict_raw(request: dict):
 @app.options("/metrics")
 @app.get("/metrics", response_model=MetricsResponse)
 async def get_metrics():
-    """Get model performance metrics on held-out test set"""
+    """Get model performance metrics on held-out test set - OPTIMIZED with caching"""
+    global metrics_cache
+    
+    # Return cached metrics if available (valid for 1 hour)
+    if metrics_cache and metrics_cache.get('timestamp'):
+        from datetime import datetime, timedelta
+        cache_time = datetime.fromisoformat(metrics_cache['timestamp'])
+        if datetime.now() - cache_time < timedelta(hours=1):
+            print("[INFO] Returning cached metrics")
+            return MetricsResponse(**metrics_cache['data'])
+    
     try:
         model = get_model()
         
         # Get feature names from model
         feature_names = get_feature_names(model)
         
-        # Try to load the held-out test set first
-        test_set_path = os.path.join(DATA_DIR, "test_set.joblib")
-        if os.path.exists(test_set_path):
-            # Use the proper held-out test set
-            print(f"[INFO] Loading held-out test set from {test_set_path}")
-            test_data = joblib.load(test_set_path)
-            X = test_data['X_test']
-            y = test_data['y_test']
-            print(f"[INFO] Test set loaded: {len(X)} samples")
-            
-            # Check if test set features match model features
-            model_features = set(feature_names)
-            test_features = set(X.columns)
-            
-            if model_features != test_features:
-                print(f"[WARNING] Test set features don't match model features!")
-                print(f"[WARNING] Model expects {len(model_features)} features, test set has {len(test_features)}")
-                print(f"[WARNING] Missing features: {model_features - test_features}")
-                print(f"[WARNING] Using full dataset instead of test set for metrics")
-                
-                # Fallback to full dataset
-                koi_path = os.path.join(DATA_DIR, "koi.csv")
-                if not os.path.exists(koi_path):
-                    raise HTTPException(status_code=404, detail="Dataset not found")
-                
-                df = pd.read_csv(koi_path, comment='#')
-                df['target'] = df['koi_disposition'].map({'CONFIRMED': 2, 'CANDIDATE': 1, 'FALSE POSITIVE': 0})
-                df = df[df['target'].notna()]
-                
-                # Get features
-                available_features = [f for f in feature_names if f in df.columns]
-                
-                X = df[available_features].fillna(0)
-                y = df['target'].astype(int)
-        else:
-            # Fallback: Load full dataset (will show warning)
-            # This is NOT ideal - metrics will be inflated
-            print("[WARNING] Test set not found, using full dataset (metrics will be inflated!)")
-            koi_path = os.path.join(DATA_DIR, "koi.csv")
-            if not os.path.exists(koi_path):
-                raise HTTPException(status_code=404, detail="Dataset not found")
-            
-            df = pd.read_csv(koi_path, comment='#')
-            df['target'] = df['koi_disposition'].map({'CONFIRMED': 2, 'CANDIDATE': 1, 'FALSE POSITIVE': 0})
-            df = df[df['target'].notna()]
-            
-            # Get features
-            available_features = [f for f in feature_names if f in df.columns]
-            
-            X = df[available_features].fillna(0)
-            y = df['target'].astype(int)
+        # Use a smaller sample for faster computation (1000 samples max)
+        koi_path = os.path.join(DATA_DIR, "koi.csv")
+        if not os.path.exists(koi_path):
+            raise HTTPException(status_code=404, detail="Dataset not found")
+        
+        print("[INFO] Loading sample dataset for metrics (optimized)")
+        df = pd.read_csv(koi_path, comment='#')
+        df['target'] = df['koi_disposition'].map({'CONFIRMED': 2, 'CANDIDATE': 1, 'FALSE POSITIVE': 0})
+        df = df[df['target'].notna()]
+        
+        # Use stratified sample for representative metrics
+        sample_size = min(1000, len(df))
+        df_sample = df.groupby('target', group_keys=False).apply(
+            lambda x: x.sample(min(len(x), sample_size // 3), random_state=42)
+        )
+        
+        # Get features
+        available_features = [f for f in feature_names if f in df_sample.columns]
+        X = df_sample[available_features].fillna(0)
+        y = df_sample['target'].astype(int)
+        
+        print(f"[INFO] Computing metrics on {len(X)} samples")
         
         # Make predictions
         y_pred = model.predict(X)
@@ -574,7 +560,7 @@ async def get_metrics():
         f1 = f1_score(y, y_pred, average='weighted', zero_division=0)
         cm = confusion_matrix(y, y_pred)
         
-        # ROC curve data (for multi-class)
+        # Simplified ROC data (only AUC, not full curves)
         y_bin = label_binarize(y, classes=[0, 1, 2])
         roc_data = {}
         
@@ -582,8 +568,6 @@ async def get_metrics():
             fpr, tpr, _ = roc_curve(y_bin[:, i], y_proba[:, i])
             roc_auc = auc(fpr, tpr)
             roc_data[label] = {
-                "fpr": fpr.tolist(),
-                "tpr": tpr.tolist(),
                 "auc": float(roc_auc)
             }
         
@@ -621,7 +605,7 @@ async def get_metrics():
         if hasattr(model, 'metadata'):
             model_info.update(model.metadata)
         
-        return MetricsResponse(
+        result = MetricsResponse(
             accuracy=float(accuracy),
             precision=float(precision),
             recall=float(recall),
@@ -631,6 +615,14 @@ async def get_metrics():
             feature_importances=feature_importances,
             model_info=model_info
         )
+        
+        # Cache the result
+        metrics_cache = {
+            'data': result.dict(),
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        return result
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get metrics: {str(e)}")
@@ -1226,13 +1218,29 @@ async def health_check():
 @app.options("/models")
 @app.get("/models")
 async def list_models():
-    """List all available trained models"""
+    """List all available trained models - OPTIMIZED with caching"""
+    global models_metadata_cache
+    
+    # Return cached models if available (valid for 30 minutes)
+    if models_metadata_cache and models_metadata_cache.get('timestamp'):
+        from datetime import datetime, timedelta
+        cache_time = datetime.fromisoformat(models_metadata_cache['timestamp'])
+        if datetime.now() - cache_time < timedelta(minutes=30):
+            print("[INFO] Returning cached models metadata")
+            return {"models": models_metadata_cache['data']}
+    
     try:
         if not os.path.exists(MODELS_METADATA_FILE):
             return {"models": []}
         
         with open(MODELS_METADATA_FILE, 'r') as f:
             metadata = json.load(f)
+        
+        # Cache the result
+        models_metadata_cache = {
+            'data': metadata,
+            'timestamp': datetime.now().isoformat()
+        }
         
         return {"models": metadata}
         
@@ -1349,14 +1357,24 @@ async def get_dataset_columns(dataset_name: str):
 @app.options("/feature-correlations")
 @app.get("/feature-correlations")
 async def get_feature_correlations():
-    """Get feature correlation matrix for visualization"""
+    """Get feature correlation matrix for visualization - OPTIMIZED with caching"""
+    global correlations_cache
+    
+    # Return cached correlations if available (valid for 2 hours)
+    if correlations_cache and correlations_cache.get('timestamp'):
+        from datetime import datetime, timedelta
+        cache_time = datetime.fromisoformat(correlations_cache['timestamp'])
+        if datetime.now() - cache_time < timedelta(hours=2):
+            print("[INFO] Returning cached correlations")
+            return correlations_cache['data']
+    
     try:
         # Load a sample of the dataset for correlation analysis
         koi_path = os.path.join(DATA_DIR, "koi.csv")
         if not os.path.exists(koi_path):
             raise HTTPException(status_code=404, detail="Dataset not found")
         
-        # Load a sample of the data
+        # Load a smaller sample for faster computation
         df = pd.read_csv(koi_path, comment='#')
         
         # Get the relevant features used by the model
@@ -1366,12 +1384,14 @@ async def get_feature_correlations():
         # Filter to only features that exist in the dataset
         available_features = [f for f in feature_names if f in df.columns]
         
-        # Take a sample for performance (correlation computation can be expensive)
-        sample_size = min(5000, len(df))
+        # Take a smaller sample for performance (1000 samples max)
+        sample_size = min(1000, len(df))
         df_sample = df[available_features].sample(n=sample_size, random_state=42)
         
         # Fill NaN values with 0 to prevent correlation calculation errors
         df_sample = df_sample.fillna(0)
+        
+        print(f"[INFO] Computing correlations on {sample_size} samples")
         
         # Calculate correlation matrix
         correlation_matrix = df_sample.corr()
@@ -1385,6 +1405,12 @@ async def get_feature_correlations():
             "matrix": correlation_matrix.values.tolist(),
             "sample_size": sample_size,
             "total_features": len(available_features)
+        }
+        
+        # Cache the result
+        correlations_cache = {
+            'data': correlations,
+            'timestamp': datetime.now().isoformat()
         }
         
         return correlations

@@ -50,7 +50,7 @@ export default function MetricsPage() {
     }
   }, [activeTab, selectedModelId])
 
-  // Load correlations when correlations tab is accessed
+  // Load correlations when correlations tab is accessed (lazy loading)
   useEffect(() => {
     if (activeTab === 'correlations' && !correlations) {
       loadCorrelations()
@@ -94,6 +94,7 @@ export default function MetricsPage() {
 
   const loadCorrelations = async () => {
     try {
+      console.log('[Metrics] Loading correlations (lazy loading)')
       const data = await api.getFeatureCorrelations()
       setCorrelations(data)
     } catch (err) {
