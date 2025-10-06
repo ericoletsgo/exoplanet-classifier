@@ -11,7 +11,7 @@ import pandas as pd
 import numpy as np
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix, roc_curve, auc
 from sklearn.preprocessing import label_binarize
 
@@ -514,7 +514,6 @@ async def get_metrics():
     
     # Return cached metrics if available (valid for 1 hour)
     if metrics_cache and metrics_cache.get('timestamp'):
-        from datetime import timedelta
         cache_time = datetime.fromisoformat(metrics_cache['timestamp'])
         if datetime.now() - cache_time < timedelta(hours=1):
             print("[INFO] Returning cached metrics")
@@ -1223,7 +1222,6 @@ async def list_models():
     
     # Return cached models if available (valid for 30 minutes)
     if models_metadata_cache and models_metadata_cache.get('timestamp'):
-        from datetime import timedelta
         cache_time = datetime.fromisoformat(models_metadata_cache['timestamp'])
         if datetime.now() - cache_time < timedelta(minutes=30):
             print("[INFO] Returning cached models metadata")
@@ -1362,7 +1360,6 @@ async def get_feature_correlations():
     
     # Return cached correlations if available (valid for 2 hours)
     if correlations_cache and correlations_cache.get('timestamp'):
-        from datetime import timedelta
         cache_time = datetime.fromisoformat(correlations_cache['timestamp'])
         if datetime.now() - cache_time < timedelta(hours=2):
             print("[INFO] Returning cached correlations")
