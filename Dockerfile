@@ -27,7 +27,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy backend code
 COPY api/ ./api/
 COPY data/ ./data/
-COPY properly_trained_model.joblib ./
+COPY balanced_model_20251005_115605.joblib ./
 
 # Copy built frontend
 COPY --from=frontend-builder /app/frontend/dist ./static

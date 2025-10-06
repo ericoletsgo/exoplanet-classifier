@@ -18,7 +18,7 @@ from sklearn.preprocessing import label_binarize
 app = FastAPI(
     title="Exoplanet Classifier API",
     description="REST API for exoplanet classification using machine learning",
-    version="1.1.0"  # Bumped to force deployment with balanced model and batch upload fixes
+    version="1.1.1"  # Bumped to force deployment with balanced model and routing fixes
 )
 
 # CORS middleware to allow frontend requests
@@ -1431,9 +1431,10 @@ if os.path.exists("static"):
             full_path.startswith("redoc") or
             full_path.startswith("static/") or
             full_path == "openapi.json" or
-            full_path in ["features", "metrics", "predict", "train", "datasets", "models", "random-example"] or
+            full_path in ["features", "metrics", "train", "datasets", "models", "random-example", "predict", "batch-predict", "predict-raw", "feature-correlations", "algorithms"] or
             full_path.startswith("datasets/") or
-            full_path.startswith("random-example/")):
+            full_path.startswith("random-example/") or
+            full_path.startswith("models/")):
             raise HTTPException(status_code=404, detail="Not found")
         
         # Serve React app for all other routes
