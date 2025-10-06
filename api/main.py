@@ -18,7 +18,7 @@ from sklearn.preprocessing import label_binarize
 app = FastAPI(
     title="Exoplanet Classifier API",
     description="REST API for exoplanet classification using machine learning",
-    version="1.0.9"  # Bumped to force deployment with metrics and predict-raw fixes
+    version="1.1.0"  # Bumped to force deployment with balanced model and batch upload fixes
 )
 
 # CORS middleware to allow frontend requests
