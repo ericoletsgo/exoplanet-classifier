@@ -1,5 +1,6 @@
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom'
 import { Home, Target, Database, Upload, Brain } from 'lucide-react'
+import { useEffect } from 'react'
 import HomePage from './pages/HomePage'
 import PredictPage from './pages/PredictPage'
 import DatasetsPage from './pages/DatasetsPage'
@@ -8,6 +9,13 @@ import ModelRetrainingPage from './pages/ModelRetrainingPage'
 
 function Navigation() {
   const location = useLocation()
+  
+  // Debug logging for routing
+  useEffect(() => {
+    console.log('🔍 [ROUTING DEBUG] Current pathname:', location.pathname)
+    console.log('🔍 [ROUTING DEBUG] Full location:', location)
+    console.log('🔍 [ROUTING DEBUG] Timestamp:', new Date().toISOString())
+  }, [location])
   
   const navItems = [
     { path: '/', icon: Home, label: 'Home' },
@@ -55,6 +63,19 @@ function Navigation() {
   )
 }
 
+// Debug component to show current route
+function RouteDebugger() {
+  const location = useLocation()
+  
+  return (
+    <div className="fixed bottom-4 right-4 bg-blue-900 text-white p-2 rounded text-xs z-50">
+      <div>Route: {location.pathname}</div>
+      <div>Search: {location.search}</div>
+      <div>Hash: {location.hash}</div>
+    </div>
+  )
+}
+
 function App() {
   return (
     <Router>
@@ -69,6 +90,7 @@ function App() {
             <Route path="/datasets" element={<DatasetsPage />} />
           </Routes>
         </main>
+        <RouteDebugger />
       </div>
     </Router>
   )
