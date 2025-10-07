@@ -19,26 +19,6 @@
       "dest": "/api/main.py"
     },
     {
-      "src": "/predict",
-      "dest": "/frontend/dist/index.html"
-    },
-    {
-      "src": "/batch",
-      "dest": "/frontend/dist/index.html"
-    },
-    {
-      "src": "/retrain",
-      "dest": "/frontend/dist/index.html"
-    },
-    {
-      "src": "/datasets",
-      "dest": "/frontend/dist/index.html"
-    },
-    {
-      "src": "/metrics",
-      "dest": "/frontend/dist/index.html"
-    },
-    {
       "src": "/(.*)",
       "dest": "/frontend/dist/index.html"
     }

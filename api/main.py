@@ -1251,36 +1251,8 @@ async def get_available_algorithms():
         "total_count": len(algorithms)
     }
 
-# Add static file serving for production
-from fastapi.staticfiles import StaticFiles
-import os
-
-# Serve React build files in production
-if os.path.exists("static"):
-    app.mount("/static", StaticFiles(directory="static"), name="static")
-    
-    # Serve React app for frontend routes only
-    from fastapi.responses import FileResponse
-    
-    # Frontend routes are handled by Vercel routing, not FastAPI
-    
-    # Catch-all route for API endpoints only (Vercel handles frontend routing)
-    @app.get("/{full_path:path}")
-    async def api_catch_all(full_path: str):
-        # Only handle API routes, let Vercel handle frontend routes
-        if (full_path.startswith("api/") or 
-            full_path.startswith("docs") or 
-            full_path.startswith("redoc") or
-            full_path.startswith("static/") or
-            full_path == "openapi.json" or
-            full_path in ["features", "metrics", "train", "datasets", "models", "random-example", "predict", "batch-predict", "predict-raw", "feature-correlations", "algorithms"] or
-            full_path.startswith("datasets/") or
-            full_path.startswith("random-example/") or
-            full_path.startswith("models/")):
-            raise HTTPException(status_code=404, detail="API endpoint not found")
-        
-        # For any other route, let Vercel handle it (should be frontend routes)
-        raise HTTPException(status_code=404, detail="Route not found - handled by Vercel")
+# Vercel handles all frontend routing automatically
+# FastAPI only needs to handle API endpoints
 
 # Vercel compatibility
 handler = app
