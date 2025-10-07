@@ -1262,7 +1262,14 @@ if os.path.exists("static"):
     # Serve React app for frontend routes only
     from fastapi.responses import FileResponse
     
-    # Serve React app for non-conflicting frontend routes
+    # Serve React app for specific frontend routes
+    @app.get("/predict")
+    async def serve_predict_page():
+        if os.path.exists("static/index.html"):
+            return FileResponse("static/index.html")
+        else:
+            raise HTTPException(status_code=404, detail="Frontend not built")
+    
     @app.get("/batch")
     async def serve_batch_page():
         if os.path.exists("static/index.html"):
@@ -1272,6 +1279,20 @@ if os.path.exists("static"):
     
     @app.get("/retrain")
     async def serve_retrain_page():
+        if os.path.exists("static/index.html"):
+            return FileResponse("static/index.html")
+        else:
+            raise HTTPException(status_code=404, detail="Frontend not built")
+    
+    @app.get("/datasets")
+    async def serve_datasets_page():
+        if os.path.exists("static/index.html"):
+            return FileResponse("static/index.html")
+        else:
+            raise HTTPException(status_code=404, detail="Frontend not built")
+    
+    @app.get("/metrics")
+    async def serve_metrics_page():
         if os.path.exists("static/index.html"):
             return FileResponse("static/index.html")
         else:
@@ -1287,12 +1308,14 @@ if os.path.exists("static"):
             full_path.startswith("static/") or
             full_path == "openapi.json" or
             full_path in ["features", "metrics", "train", "datasets", "models", "random-example", "predict", "batch-predict", "predict-raw", "feature-correlations", "algorithms"] or
+            full_path in ["predict", "batch", "retrain", "datasets", "metrics"] or  # Frontend routes
             full_path.startswith("datasets/") or
             full_path.startswith("random-example/") or
             full_path.startswith("models/")):
             raise HTTPException(status_code=404, detail="Not found")
         
-        # Serve React app for all other routes
+        # For any other route, serve the React app (SPA routing)
+        # This handles cases like /retrain, /batch, /predict, etc.
         if os.path.exists("static/index.html"):
             return FileResponse("static/index.html")
         else:
