@@ -1262,64 +1262,25 @@ if os.path.exists("static"):
     # Serve React app for frontend routes only
     from fastapi.responses import FileResponse
     
-    # Serve React app for specific frontend routes
-    @app.get("/predict")
-    async def serve_predict_page():
-        if os.path.exists("static/index.html"):
-            return FileResponse("static/index.html")
-        else:
-            raise HTTPException(status_code=404, detail="Frontend not built")
+    # Frontend routes are handled by Vercel routing, not FastAPI
     
-    @app.get("/batch")
-    async def serve_batch_page():
-        if os.path.exists("static/index.html"):
-            return FileResponse("static/index.html")
-        else:
-            raise HTTPException(status_code=404, detail="Frontend not built")
-    
-    @app.get("/retrain")
-    async def serve_retrain_page():
-        if os.path.exists("static/index.html"):
-            return FileResponse("static/index.html")
-        else:
-            raise HTTPException(status_code=404, detail="Frontend not built")
-    
-    @app.get("/datasets")
-    async def serve_datasets_page():
-        if os.path.exists("static/index.html"):
-            return FileResponse("static/index.html")
-        else:
-            raise HTTPException(status_code=404, detail="Frontend not built")
-    
-    @app.get("/metrics")
-    async def serve_metrics_page():
-        if os.path.exists("static/index.html"):
-            return FileResponse("static/index.html")
-        else:
-            raise HTTPException(status_code=404, detail="Frontend not built")
-    
-    # Catch-all for other frontend routes (React Router will handle routing)
+    # Catch-all route for API endpoints only (Vercel handles frontend routing)
     @app.get("/{full_path:path}")
-    async def serve_react_app(full_path: str):
-        # Don't serve React for API routes or system routes
+    async def api_catch_all(full_path: str):
+        # Only handle API routes, let Vercel handle frontend routes
         if (full_path.startswith("api/") or 
             full_path.startswith("docs") or 
             full_path.startswith("redoc") or
             full_path.startswith("static/") or
             full_path == "openapi.json" or
             full_path in ["features", "metrics", "train", "datasets", "models", "random-example", "predict", "batch-predict", "predict-raw", "feature-correlations", "algorithms"] or
-            full_path in ["predict", "batch", "retrain", "datasets", "metrics"] or  # Frontend routes
             full_path.startswith("datasets/") or
             full_path.startswith("random-example/") or
             full_path.startswith("models/")):
-            raise HTTPException(status_code=404, detail="Not found")
+            raise HTTPException(status_code=404, detail="API endpoint not found")
         
-        # For any other route, serve the React app (SPA routing)
-        # This handles cases like /retrain, /batch, /predict, etc.
-        if os.path.exists("static/index.html"):
-            return FileResponse("static/index.html")
-        else:
-            raise HTTPException(status_code=404, detail="Frontend not built")
+        # For any other route, let Vercel handle it (should be frontend routes)
+        raise HTTPException(status_code=404, detail="Route not found - handled by Vercel")
 
 # Vercel compatibility
 handler = app
