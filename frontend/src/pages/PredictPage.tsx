@@ -29,8 +29,8 @@ export default function PredictPage() {
   useEffect(() => {
     // Load only essential data on mount
     loadFeatures()
-    // Load models in background (non-blocking)
-    loadModels()
+    // Load models in background (non-blocking) - defer to improve initial load
+    setTimeout(() => loadModels(), 100)
   }, [])
 
   const loadFeatures = async () => {

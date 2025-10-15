@@ -91,37 +91,75 @@ export interface ModelEvaluationResponse {
 }
 
 class APIClient {
-  private async request<T>(endpoint: string, options?: RequestInit & { timeout?: number }): Promise<T> {
-    const { timeout = 15000, ...fetchOptions } = options || {}
+  private cache = new Map<string, { data: any; timestamp: number }>()
+  private readonly CACHE_DURATION = 5 * 60 * 1000 // 5 minutes
+  private pendingRequests = new Map<string, Promise<any>>() // Prevent duplicate requests
+
+  private async request<T>(endpoint: string, options?: RequestInit & { timeout?: number; useCache?: boolean }): Promise<T> {
+    const { timeout = 15000, useCache = false, ...fetchOptions } = options || {}
+    
+    // Check cache for GET requests
+    if (useCache && !fetchOptions.method) {
+      const cached = this.cache.get(endpoint)
+      if (cached && Date.now() - cached.timestamp < this.CACHE_DURATION) {
+        return cached.data
+      }
+      
+      // Check if request is already pending
+      if (this.pendingRequests.has(endpoint)) {
+        return this.pendingRequests.get(endpoint)
+      }
+    }
     
     const controller = new AbortController()
     const timeoutId = timeout ? setTimeout(() => controller.abort(), timeout) : null
     
-    try {
-      const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-        ...fetchOptions,
-        signal: controller.signal,
-        headers: {
-          'Content-Type': 'application/json',
-          ...fetchOptions?.headers,
-        },
-      })
+    const requestPromise = (async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+          ...fetchOptions,
+          signal: controller.signal,
+          headers: {
+            'Content-Type': 'application/json',
+            ...fetchOptions?.headers,
+          },
+        })
 
-      if (timeoutId) clearTimeout(timeoutId)
+        if (timeoutId) clearTimeout(timeoutId)
 
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ detail: 'Unknown error' }))
-        throw new Error(error.detail || `HTTP ${response.status}`)
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({ detail: 'Unknown error' }))
+          throw new Error(error.detail || `HTTP ${response.status}`)
+        }
+
+        const data = await response.json()
+        
+        // Cache GET requests
+        if (useCache && !fetchOptions.method) {
+          this.cache.set(endpoint, { data, timestamp: Date.now() })
+        }
+        
+        return data
+      } catch (error) {
+        if (timeoutId) clearTimeout(timeoutId)
+        if (error instanceof Error && error.name === 'AbortError') {
+          throw new Error('Request timeout')
+        }
+        throw error
+      } finally {
+        // Remove from pending requests
+        if (useCache && !fetchOptions.method) {
+          this.pendingRequests.delete(endpoint)
+        }
       }
-
-      return response.json()
-    } catch (error) {
-      if (timeoutId) clearTimeout(timeoutId)
-      if (error instanceof Error && error.name === 'AbortError') {
-        throw new Error('Request timeout')
-      }
-      throw error
+    })()
+    
+    // Store pending request for GET requests
+    if (useCache && !fetchOptions.method) {
+      this.pendingRequests.set(endpoint, requestPromise)
     }
+    
+    return requestPromise
   }
 
   async healthCheck() {
@@ -129,7 +167,7 @@ class APIClient {
   }
 
   async getFeatures() {
-    return this.request<FeaturesResponse>('/features')
+    return this.request<FeaturesResponse>('/features', { useCache: true })
   }
 
   async predict(data: PredictionRequest) {
@@ -179,7 +217,7 @@ class APIClient {
   }
 
   async listModels() {
-    return this.request<{ models: any[] }>('/models', { timeout: 30000 }) // 30 second timeout for models
+    return this.request<{ models: any[] }>('/models', { timeout: 30000, useCache: true }) // 30 second timeout for models
   }
 
   async getRandomExample(datasetName: string, disposition?: string) {
@@ -258,7 +296,7 @@ class APIClient {
       algorithms: Record<string, boolean>
       available_count: number
       total_count: number
-    }>('/algorithms', { timeout: 20000 }) // 20 second timeout for algorithms
+    }>('/algorithms', { timeout: 20000, useCache: true }) // 20 second timeout for algorithms
   }
 }
 

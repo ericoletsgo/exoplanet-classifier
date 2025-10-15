@@ -1,7 +1,10 @@
-import { Link } from 'react-router-dom'
 import { Target, BarChart3, Database, Upload, Brain } from 'lucide-react'
 
-export default function HomePage() {
+interface HomePageProps {
+  onNavigate?: (tab: string) => void
+}
+
+export default function HomePage({ onNavigate }: HomePageProps) {
   // Removed modelInfo state and loading to prevent slow page loads
 
   const features = [
@@ -9,35 +12,35 @@ export default function HomePage() {
       icon: Target,
       title: 'Make Predictions',
       description: 'Classify exoplanet candidates using our trained ML model',
-      link: '/predict',
+      tab: 'predict',
       color: 'text-blue-400',
     },
     {
       icon: Upload,
       title: 'Batch Upload',
       description: 'Upload CSV files to classify multiple candidates at once',
-      link: '/batch',
+      tab: 'batch',
       color: 'text-cyan-400',
     },
     {
       icon: BarChart3,
       title: 'View Metrics',
       description: 'Explore model performance, accuracy, and feature importance',
-      link: '/metrics',
+      tab: 'retrain', // Redirect to retraining page since metrics are there
       color: 'text-green-400',
     },
     {
       icon: Brain,
       title: 'Model Retraining',
       description: 'Train new models and manage existing ones',
-      link: '/retrain',
+      tab: 'retrain',
       color: 'text-purple-400',
     },
     {
       icon: Database,
       title: 'Browse Datasets',
       description: 'Explore KOI, K2, and TOI exoplanet datasets',
-      link: '/datasets',
+      tab: 'datasets',
       color: 'text-indigo-400',
     },
   ]
@@ -58,15 +61,15 @@ export default function HomePage() {
         {features.map((feature) => {
           const Icon = feature.icon
           return (
-            <Link
-              key={feature.link}
-              to={feature.link}
-              className="card hover:border-primary-500 transition-all duration-200 hover:scale-105"
+            <button
+              key={feature.tab}
+              onClick={() => onNavigate?.(feature.tab)}
+              className="card hover:border-primary-500 transition-all duration-200 hover:scale-105 text-left w-full"
             >
               <Icon className={`w-12 h-12 ${feature.color} mb-4`} />
               <h3 className="text-xl font-semibold mb-2">{feature.title}</h3>
               <p className="text-slate-400">{feature.description}</p>
-            </Link>
+            </button>
           )
         })}
       </div>
