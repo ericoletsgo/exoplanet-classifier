@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
-import { Database, Loader2, AlertCircle, ChevronLeft, ChevronRight, Filter } from 'lucide-react'
+import { Database, AlertCircle, ChevronLeft, ChevronRight, Filter } from 'lucide-react'
 import { api, type DatasetResponse } from '../lib/api'
 import { getDispositionColor } from '../lib/utils'
+import LoadingScreen from '../components/LoadingScreen'
 
 export default function DatasetsPage() {
   const [dataset, setDataset] = useState<DatasetResponse | null>(null)
@@ -114,9 +115,11 @@ export default function DatasetsPage() {
 
       {/* Data Table */}
       {loading ? (
-        <div className="flex items-center justify-center h-64">
-          <Loader2 className="w-8 h-8 animate-spin text-primary-500" />
-        </div>
+        <LoadingScreen 
+          message="Loading Dataset" 
+          subMessage="Fetching data from database..."
+          type="dataset"
+        />
       ) : dataset ? (
         <div className="card overflow-hidden">
           <div className="overflow-x-auto">
