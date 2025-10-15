@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
-import { Upload, Loader2, AlertCircle, Download } from 'lucide-react'
+import { Upload, AlertCircle, Download } from 'lucide-react'
 import { api } from '../lib/api'
+import LoadingScreen, { LoadingSpinner } from '../components/LoadingScreen'
 
 interface ColumnMapping {
   csvColumn: string
@@ -22,6 +23,8 @@ export default function BatchPredictPage() {
   const [step, setStep] = useState<'upload' | 'results'>('upload')
   const [models, setModels] = useState<any[]>([])
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null)
+  const [showBatchLoading, setShowBatchLoading] = useState(false)
+  const [batchProgress, setBatchProgress] = useState<number>(0)
 
   useEffect(() => {
     // Defer models loading to improve initial load
@@ -144,8 +147,35 @@ export default function BatchPredictPage() {
         console.warn(`[Batch Upload] Warning: Only ${coveragePercent.toFixed(0)}% of features mapped. Predictions may be less accurate.`)
       }
       
-      // Automatically run predictions without requiring user interaction
-      await runPredictions(data, mappings, allFeatures)
+      // Show batch loading screen
+      setShowBatchLoading(true)
+      setBatchProgress(0)
+      
+      // Simulate progress during batch processing
+      const progressInterval = setInterval(() => {
+        setBatchProgress(prev => {
+          if (prev >= 80) return prev
+          return prev + Math.random() * 15
+        })
+      }, 1000)
+      
+      try {
+        // Automatically run predictions without requiring user interaction
+        await runPredictions(data, mappings, allFeatures)
+        
+        // Complete progress
+        setBatchProgress(100)
+        clearInterval(progressInterval)
+        
+        // Hide loading screen after a delay
+        setTimeout(() => {
+          setShowBatchLoading(false)
+        }, 1500)
+      } catch (err) {
+        clearInterval(progressInterval)
+        setShowBatchLoading(false)
+        throw err
+      }
     } catch (err) {
       console.error('[Batch Upload] Error:', err)
       setError(err instanceof Error ? err.message : 'Failed to parse CSV file or run predictions')
@@ -265,6 +295,17 @@ export default function BatchPredictPage() {
 
   return (
     <div className="space-y-6">
+      {/* Batch Processing Loading Screen */}
+      {showBatchLoading && (
+        <LoadingScreen 
+          message="Processing Batch Predictions" 
+          subMessage="Analyzing CSV data and running ML predictions..."
+          type="dataset"
+          progress={batchProgress}
+          showProgress={true}
+        />
+      )}
+
       <div>
         <h1 className="text-3xl font-bold flex items-center gap-3">
           <Upload className="w-8 h-8 text-primary-500" />
@@ -328,10 +369,7 @@ export default function BatchPredictPage() {
             />
             <label htmlFor="csv-upload" className={`btn-primary cursor-pointer inline-block ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}>
               {loading ? (
-                <span className="flex items-center gap-2">
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                  Processing...
-                </span>
+                <LoadingSpinner size="sm" message="Processing CSV..." />
               ) : (
                 'Select CSV File'
               )}

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
-import { Upload, Loader2, AlertCircle, Trash2, BarChart3, Brain } from 'lucide-react'
+import { Upload, AlertCircle, Trash2, BarChart3, Brain, Loader2 } from 'lucide-react'
 import { api } from '../lib/api'
+import LoadingScreen, { LoadingSpinner } from '../components/LoadingScreen'
 
 interface ModelMetadata {
   id: string
@@ -37,6 +38,8 @@ export default function ModelRetrainingPage() {
   const [uploadedFile, setUploadedFile] = useState<File | null>(null)
   const [uploadProgress, setUploadProgress] = useState<string>('')
   const [csvContent, setCsvContent] = useState<string>('')
+  const [trainingProgress, setTrainingProgress] = useState<number>(0)
+  const [showTrainingScreen, setShowTrainingScreen] = useState(false)
   
   // Target column selection
   const [datasetColumns, setDatasetColumns] = useState<any[]>([])
@@ -225,6 +228,16 @@ export default function ModelRetrainingPage() {
     setLoading(true)
     setError(null)
     setUploadProgress('')
+    setShowTrainingScreen(true)
+    setTrainingProgress(0)
+
+    // Simulate progress updates during training
+    const progressInterval = setInterval(() => {
+      setTrainingProgress(prev => {
+        if (prev >= 90) return prev // Stop at 90% until actual completion
+        return prev + Math.random() * 10
+      })
+    }, 2000)
 
     try {
       setUploadProgress('Training advanced ensemble... This may take a few minutes.')
@@ -243,6 +256,10 @@ export default function ModelRetrainingPage() {
         target_mapping: Object.keys(targetMapping).length > 0 ? targetMapping : undefined,
         csv_data: uploadedFile ? csvContent : undefined
       })
+      
+      // Complete progress
+      setTrainingProgress(100)
+      clearInterval(progressInterval)
       
       if (result.cv_accuracy && result.algorithms_used) {
         setUploadProgress(`🎯 Ensemble trained successfully! CV Accuracy: ${(result.cv_accuracy * 100).toFixed(1)}%, Test Accuracy: ${(result.metrics?.accuracy * 100).toFixed(1)}%, Used ${result.algorithms_used.length} algorithms`)
@@ -263,8 +280,15 @@ export default function ModelRetrainingPage() {
       
       await loadModels() // Refresh models list
       
+      // Hide training screen after a delay
+      setTimeout(() => {
+        setShowTrainingScreen(false)
+      }, 2000)
+      
     } catch (err) {
+      clearInterval(progressInterval)
       setError(err instanceof Error ? err.message : 'Training failed')
+      setShowTrainingScreen(false)
     } finally {
       setLoading(false)
     }
@@ -284,6 +308,17 @@ export default function ModelRetrainingPage() {
 
   return (
     <div className="space-y-6">
+      {/* Training Loading Screen */}
+      {showTrainingScreen && (
+        <LoadingScreen 
+          message="Training Model" 
+          subMessage="Training ensemble with multiple algorithms..."
+          type="training"
+          progress={trainingProgress}
+          showProgress={true}
+        />
+      )}
+
       <div>
         <h1 className="text-3xl font-bold flex items-center gap-3">
           <Brain className="w-8 h-8 text-primary-500" />
@@ -923,10 +958,7 @@ export default function ModelRetrainingPage() {
               className="btn-primary w-full flex items-center justify-center gap-2"
             >
               {loading ? (
-                <>
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                  Training Model...
-                </>
+                <LoadingSpinner size="sm" message="Starting Training..." />
               ) : (
                 <>
                   <Brain className="w-5 h-5" />

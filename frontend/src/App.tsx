@@ -1,7 +1,7 @@
 import { Home, Target, Database, Upload, Brain } from 'lucide-react'
 import { useState, Suspense, lazy } from 'react'
-import { Loader2 } from 'lucide-react'
 import HomePage from './pages/HomePage'
+import LoadingScreen from './components/LoadingScreen'
 
 // Lazy load heavy components to improve initial load time
 const PredictPage = lazy(() => import('./pages/PredictPage'))
@@ -71,9 +71,11 @@ function App() {
       case 'predict':
         return (
           <Suspense fallback={
-            <div className="flex items-center justify-center h-64">
-              <Loader2 className="w-8 h-8 animate-spin text-primary-500" />
-            </div>
+            <LoadingScreen 
+              message="Loading Prediction Interface" 
+              subMessage="Preparing ML models and features..."
+              type="prediction"
+            />
           }>
             <PredictPage />
           </Suspense>
@@ -81,9 +83,11 @@ function App() {
       case 'batch':
         return (
           <Suspense fallback={
-            <div className="flex items-center justify-center h-64">
-              <Loader2 className="w-8 h-8 animate-spin text-primary-500" />
-            </div>
+            <LoadingScreen 
+              message="Loading Batch Upload" 
+              subMessage="Preparing CSV processing tools..."
+              type="dataset"
+            />
           }>
             <BatchPredictPage />
           </Suspense>
@@ -91,9 +95,11 @@ function App() {
       case 'retrain':
         return (
           <Suspense fallback={
-            <div className="flex items-center justify-center h-64">
-              <Loader2 className="w-8 h-8 animate-spin text-primary-500" />
-            </div>
+            <LoadingScreen 
+              message="Loading Model Training" 
+              subMessage="Initializing training algorithms..."
+              type="training"
+            />
           }>
             <ModelRetrainingPage />
           </Suspense>
@@ -101,9 +107,11 @@ function App() {
       case 'datasets':
         return (
           <Suspense fallback={
-            <div className="flex items-center justify-center h-64">
-              <Loader2 className="w-8 h-8 animate-spin text-primary-500" />
-            </div>
+            <LoadingScreen 
+              message="Loading Datasets" 
+              subMessage="Connecting to database..."
+              type="dataset"
+            />
           }>
             <DatasetsPage />
           </Suspense>

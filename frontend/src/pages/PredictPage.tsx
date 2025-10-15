@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
-import { Target, Loader2, AlertCircle, Dice1, Dice2, Dice3, CheckCircle, XCircle } from 'lucide-react'
+import { Target, AlertCircle, Dice1, Dice2, Dice3, CheckCircle, XCircle } from 'lucide-react'
 import { api, type PredictionResponse, type FeaturesResponse } from '../lib/api'
 import { formatPercentage, getDispositionColor, getConfidenceColor } from '../lib/utils'
+import LoadingScreen, { LoadingSpinner } from '../components/LoadingScreen'
 
 interface RandomExampleData {
   features: Record<string, number>
@@ -136,9 +137,11 @@ export default function PredictPage() {
 
   if (!features) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="w-8 h-8 animate-spin text-primary-500" />
-      </div>
+      <LoadingScreen 
+        message="Loading Features" 
+        subMessage="Fetching ML model parameters..."
+        type="prediction"
+      />
     )
   }
 
@@ -306,10 +309,7 @@ export default function PredictPage() {
             className="btn-primary w-full flex items-center justify-center gap-2"
           >
             {loading ? (
-              <>
-                <Loader2 className="w-5 h-5 animate-spin" />
-                Predicting...
-              </>
+              <LoadingSpinner size="sm" message="Predicting..." />
             ) : (
               <>
                 <Target className="w-5 h-5" />
