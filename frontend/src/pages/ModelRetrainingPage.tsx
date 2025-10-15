@@ -75,8 +75,11 @@ export default function ModelRetrainingPage() {
   })
 
   useEffect(() => {
-    loadModels()
-    loadAvailableAlgorithms()
+    // Defer non-essential API calls to improve initial load
+    setTimeout(() => {
+      loadModels()
+      loadAvailableAlgorithms()
+    }, 200)
   }, [])
 
   useEffect(() => {

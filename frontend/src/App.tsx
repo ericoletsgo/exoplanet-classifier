@@ -1,28 +1,26 @@
-import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom'
 import { Home, Target, Database, Upload, Brain } from 'lucide-react'
-import { useEffect } from 'react'
+import { useState, Suspense, lazy } from 'react'
+import { Loader2 } from 'lucide-react'
 import HomePage from './pages/HomePage'
-import PredictPage from './pages/PredictPage'
-import DatasetsPage from './pages/DatasetsPage'
-import BatchPredictPage from './pages/BatchPredictPage'
-import ModelRetrainingPage from './pages/ModelRetrainingPage'
 
-function Navigation() {
-  const location = useLocation()
-  
-  // Debug logging for routing
-  useEffect(() => {
-    console.log('🔍 [ROUTING DEBUG] Current pathname:', location.pathname)
-    console.log('🔍 [ROUTING DEBUG] Full location:', location)
-    console.log('🔍 [ROUTING DEBUG] Timestamp:', new Date().toISOString())
-  }, [location])
-  
+// Lazy load heavy components to improve initial load time
+const PredictPage = lazy(() => import('./pages/PredictPage'))
+const DatasetsPage = lazy(() => import('./pages/DatasetsPage'))
+const BatchPredictPage = lazy(() => import('./pages/BatchPredictPage'))
+const ModelRetrainingPage = lazy(() => import('./pages/ModelRetrainingPage'))
+
+interface NavigationProps {
+  activeTab: string
+  onTabChange: (tab: string) => void
+}
+
+function Navigation({ activeTab, onTabChange }: NavigationProps) {
   const navItems = [
-    { path: '/', icon: Home, label: 'Home' },
-    { path: '/predict', icon: Target, label: 'Predict' },
-    { path: '/batch', icon: Upload, label: 'Batch Upload' },
-    { path: '/retrain', icon: Brain, label: 'Model Retraining' },
-    { path: '/datasets', icon: Database, label: 'Datasets' },
+    { id: 'home', icon: Home, label: 'Home' },
+    { id: 'predict', icon: Target, label: 'Predict' },
+    { id: 'batch', icon: Upload, label: 'Batch Upload' },
+    { id: 'retrain', icon: Brain, label: 'Model Retraining' },
+    { id: 'datasets', icon: Database, label: 'Datasets' },
   ]
   
   return (
@@ -39,11 +37,11 @@ function Navigation() {
             <div className="ml-10 flex items-baseline space-x-4">
               {navItems.map((item) => {
                 const Icon = item.icon
-                const isActive = location.pathname === item.path
+                const isActive = activeTab === item.id
                 return (
-                  <Link
-                    key={item.path}
-                    to={item.path}
+                  <button
+                    key={item.id}
+                    onClick={() => onTabChange(item.id)}
                     className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
                       isActive
                         ? 'bg-primary-600 text-white'
@@ -52,7 +50,7 @@ function Navigation() {
                   >
                     <Icon className="w-4 h-4" />
                     {item.label}
-                  </Link>
+                  </button>
                 )
               })}
             </div>
@@ -63,36 +61,65 @@ function Navigation() {
   )
 }
 
-// Debug component to show current route
-function RouteDebugger() {
-  const location = useLocation()
-  
-  return (
-    <div className="fixed bottom-4 right-4 bg-blue-900 text-white p-2 rounded text-xs z-50">
-      <div>Route: {location.pathname}</div>
-      <div>Search: {location.search}</div>
-      <div>Hash: {location.hash}</div>
-    </div>
-  )
-}
-
 function App() {
+  const [activeTab, setActiveTab] = useState('home')
+
+  const renderActiveComponent = () => {
+    switch (activeTab) {
+      case 'home':
+        return <HomePage onNavigate={setActiveTab} />
+      case 'predict':
+        return (
+          <Suspense fallback={
+            <div className="flex items-center justify-center h-64">
+              <Loader2 className="w-8 h-8 animate-spin text-primary-500" />
+            </div>
+          }>
+            <PredictPage />
+          </Suspense>
+        )
+      case 'batch':
+        return (
+          <Suspense fallback={
+            <div className="flex items-center justify-center h-64">
+              <Loader2 className="w-8 h-8 animate-spin text-primary-500" />
+            </div>
+          }>
+            <BatchPredictPage />
+          </Suspense>
+        )
+      case 'retrain':
+        return (
+          <Suspense fallback={
+            <div className="flex items-center justify-center h-64">
+              <Loader2 className="w-8 h-8 animate-spin text-primary-500" />
+            </div>
+          }>
+            <ModelRetrainingPage />
+          </Suspense>
+        )
+      case 'datasets':
+        return (
+          <Suspense fallback={
+            <div className="flex items-center justify-center h-64">
+              <Loader2 className="w-8 h-8 animate-spin text-primary-500" />
+            </div>
+          }>
+            <DatasetsPage />
+          </Suspense>
+        )
+      default:
+        return <HomePage onNavigate={setActiveTab} />
+    }
+  }
+
   return (
-    <Router>
-      <div className="min-h-screen bg-slate-900 text-white">
-        <Navigation />
-        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          <Routes>
-            <Route path="/" element={<HomePage />} />
-            <Route path="/predict" element={<PredictPage />} />
-            <Route path="/batch" element={<BatchPredictPage />} />
-            <Route path="/retrain" element={<ModelRetrainingPage />} />
-            <Route path="/datasets" element={<DatasetsPage />} />
-          </Routes>
-        </main>
-        <RouteDebugger />
-      </div>
-    </Router>
+    <div className="min-h-screen bg-slate-900 text-white">
+      <Navigation activeTab={activeTab} onTabChange={setActiveTab} />
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {renderActiveComponent()}
+      </main>
+    </div>
   )
 }
 
