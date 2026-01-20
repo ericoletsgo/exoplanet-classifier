@@ -16,7 +16,7 @@ interface RandomExampleData {
 }
 
 // Default features to show interface immediately
-const DEFAULT_FEATURES = {
+const DEFAULT_FEATURES: Record<string, string[]> = {
   signal_quality: ['koi_model_snr', 'koi_max_mult_ev'],
   orbital_params: ['koi_period', 'koi_depth', 'koi_duration', 'koi_prad', 'koi_impact'],
   stellar_params: ['koi_steff', 'koi_srad', 'koi_slogg', 'koi_kepmag'],
