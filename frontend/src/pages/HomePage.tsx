@@ -1,46 +1,43 @@
 import { Target, BarChart3, Database, Upload, Brain } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 
-interface HomePageProps {
-  onNavigate?: (tab: string) => void
-}
-
-export default function HomePage({ onNavigate }: HomePageProps) {
-  // Removed modelInfo state and loading to prevent slow page loads
+export default function HomePage() {
+  const navigate = useNavigate()
 
   const features = [
     {
       icon: Target,
       title: 'Make Predictions',
       description: 'Classify exoplanet candidates using our trained ML model',
-      tab: 'predict',
+      path: '/predict',
       color: 'text-blue-400',
     },
     {
       icon: Upload,
       title: 'Batch Upload',
       description: 'Upload CSV files to classify multiple candidates at once',
-      tab: 'batch',
+      path: '/batch',
       color: 'text-cyan-400',
     },
     {
       icon: BarChart3,
       title: 'View Metrics',
       description: 'Explore model performance, accuracy, and feature importance',
-      tab: 'retrain', // Redirect to retraining page since metrics are there
+      path: '/retrain',
       color: 'text-green-400',
     },
     {
       icon: Brain,
       title: 'Model Retraining',
       description: 'Train new models and manage existing ones',
-      tab: 'retrain',
+      path: '/retrain',
       color: 'text-purple-400',
     },
     {
       icon: Database,
       title: 'Browse Datasets',
       description: 'Explore KOI, K2, and TOI exoplanet datasets',
-      tab: 'datasets',
+      path: '/datasets',
       color: 'text-indigo-400',
     },
   ]
@@ -58,12 +55,12 @@ export default function HomePage({ onNavigate }: HomePageProps) {
 
       {/* Feature Cards */}
       <div className="grid md:grid-cols-2 lg:grid-cols-5 gap-6">
-        {features.map((feature) => {
+        {features.map((feature, index) => {
           const Icon = feature.icon
           return (
             <button
-              key={feature.tab}
-              onClick={() => onNavigate?.(feature.tab)}
+              key={`${feature.path}-${index}`}
+              onClick={() => navigate(feature.path)}
               className="card hover:border-primary-500 transition-all duration-200 hover:scale-105 text-left w-full"
             >
               <Icon className={`w-12 h-12 ${feature.color} mb-4`} />
@@ -73,8 +70,6 @@ export default function HomePage({ onNavigate }: HomePageProps) {
           )
         })}
       </div>
-
-      {/* Quick Stats - Removed to prevent slow loading */}
 
       {/* About */}
       <div className="card bg-slate-800/50">

@@ -11,7 +11,7 @@ import pandas as pd
 import numpy as np
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
 app = FastAPI(
     title="Exoplanet Classifier API",
@@ -235,6 +235,7 @@ class DatasetResponse(BaseModel):
 
 # Global variables
 model = None
+models_metadata_cache = None
 
 @app.on_event("startup")
 def load_model_on_startup():

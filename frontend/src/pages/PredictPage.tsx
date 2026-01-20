@@ -28,10 +28,9 @@ export default function PredictPage() {
   // const [modelInfo, setModelInfo] = useState<any>(null) // Not used to prevent slow loading
 
   useEffect(() => {
-    // Load only essential data on mount
+    // Load features and models in parallel on mount
     loadFeatures()
-    // Load models in background (non-blocking) - defer to improve initial load
-    setTimeout(() => loadModels(), 100)
+    loadModels()
   }, [])
 
   const loadFeatures = async () => {

@@ -27,8 +27,7 @@ export default function BatchPredictPage() {
   const [batchProgress, setBatchProgress] = useState<number>(0)
 
   useEffect(() => {
-    // Defer models loading to improve initial load
-    setTimeout(() => loadModels(), 100)
+    loadModels()
   }, [])
 
   const loadModels = async () => {
