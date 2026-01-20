@@ -15,7 +15,6 @@ export default defineConfig({
     }
   },
   build: {
-    // Optimize for production (use default minifier)
     rollupOptions: {
       output: {
         manualChunks: {

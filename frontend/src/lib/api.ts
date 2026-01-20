@@ -167,7 +167,7 @@ class APIClient {
   }
 
   async getFeatures() {
-    return this.request<FeaturesResponse>('/features', { useCache: true })
+    return this.request<FeaturesResponse>('/features', { useCache: true, timeout: 30000 })
   }
 
   async predict(data: PredictionRequest) {

@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
-import { Target, AlertCircle, Dice1, Dice2, Dice3, CheckCircle, XCircle } from 'lucide-react'
+import { Target, AlertCircle, Dice1, Dice2, Dice3, CheckCircle, XCircle, RefreshCw } from 'lucide-react'
 import { api, type PredictionResponse, type FeaturesResponse } from '../lib/api'
 import { formatPercentage, getDispositionColor, getConfidenceColor } from '../lib/utils'
-import LoadingScreen, { LoadingSpinner } from '../components/LoadingScreen'
+import { LoadingSpinner } from '../components/LoadingScreen'
 
 interface RandomExampleData {
   features: Record<string, number>
@@ -15,37 +15,59 @@ interface RandomExampleData {
   raw_row: Record<string, any>
 }
 
+// Default features to show interface immediately
+const DEFAULT_FEATURES = {
+  signal_quality: ['koi_model_snr', 'koi_max_mult_ev'],
+  orbital_params: ['koi_period', 'koi_depth', 'koi_duration', 'koi_prad', 'koi_impact'],
+  stellar_params: ['koi_steff', 'koi_srad', 'koi_slogg', 'koi_kepmag'],
+}
+
 export default function PredictPage() {
   const [features, setFeatures] = useState<FeaturesResponse | null>(null)
   const [formData, setFormData] = useState<Record<string, number>>({})
   const [prediction, setPrediction] = useState<PredictionResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [featuresLoading, setFeaturesLoading] = useState(true)
+  const [featuresError, setFeaturesError] = useState<string | null>(null)
   const [activeCategory, setActiveCategory] = useState<string>('signal_quality')
   const [randomExampleData, setRandomExampleData] = useState<RandomExampleData | null>(null)
   const [models, setModels] = useState<any[]>([])
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null)
-  // const [modelInfo, setModelInfo] = useState<any>(null) // Not used to prevent slow loading
+  const [retryCount, setRetryCount] = useState(0)
 
   useEffect(() => {
-    // Load features and models in parallel on mount
     loadFeatures()
     loadModels()
   }, [])
 
   const loadFeatures = async () => {
+    setFeaturesLoading(true)
+    setFeaturesError(null)
     try {
       const data = await api.getFeatures()
       setFeatures(data)
-      
-      // Initialize form with zeros
+
       const initialData: Record<string, number> = {}
       Object.values(data.features).flat().forEach(feature => {
         initialData[feature] = 0
       })
       setFormData(initialData)
     } catch (err) {
-      setError('Failed to load features')
+      const message = retryCount < 2
+        ? 'Server is warming up... Retrying...'
+        : 'Could not connect to server. Click retry.'
+      setFeaturesError(message)
+
+      // Auto-retry up to 2 times with delay
+      if (retryCount < 2) {
+        setTimeout(() => {
+          setRetryCount(prev => prev + 1)
+          loadFeatures()
+        }, 3000)
+      }
+    } finally {
+      setFeaturesLoading(false)
     }
   }
 
@@ -54,25 +76,9 @@ export default function PredictPage() {
       const response = await api.listModels()
       setModels(response.models || [])
     } catch (err) {
-      console.error('Failed to load models:', err)
+      // Models are optional, don't show error
     }
   }
-
-  // Optional model info loading - not used by default to prevent slow page loads
-  // const loadModelInfo = async () => {
-  //   try {
-  //     const metrics = await api.getMetrics()
-  //     setModelInfo(metrics.model_info)
-  //   } catch (err) {
-  //     console.error('Failed to load model info:', err)
-  //     // Set default model info if loading fails
-  //     setModelInfo({
-  //       n_features: 19,
-  //       n_samples: 0,
-  //       classes: ['FALSE POSITIVE', 'CANDIDATE', 'CONFIRMED']
-  //     })
-  //   }
-  // }
 
   const handleInputChange = (feature: string, value: string) => {
     setFormData(prev => ({
@@ -88,18 +94,14 @@ export default function PredictPage() {
 
     try {
       let result
-      
-      // If we have random example data, use raw prediction for accuracy
       if (randomExampleData) {
         result = await api.predictRaw(randomExampleData.raw_row)
       } else {
-        // For manual input, use regular prediction with selected model
-        result = await api.predict({ 
+        result = await api.predict({
           features: formData,
           model_id: selectedModelId || undefined
         })
       }
-      
       setPrediction(result)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Prediction failed')
@@ -113,13 +115,12 @@ export default function PredictPage() {
       const exampleData = await api.getRandomExample('koi', disposition)
       setRandomExampleData(exampleData)
       setFormData(exampleData.features)
-      setPrediction(null) // Clear previous prediction
+      setPrediction(null)
       setError(null)
     } catch (err) {
       setError('Failed to load random example')
     }
   }
-
 
   const handleReset = () => {
     if (features) {
@@ -128,21 +129,21 @@ export default function PredictPage() {
         resetData[feature] = 0
       })
       setFormData(resetData)
-      setPrediction(null)
-      setError(null)
-      setRandomExampleData(null)
     }
+    setPrediction(null)
+    setError(null)
+    setRandomExampleData(null)
   }
 
-  if (!features) {
-    return (
-      <LoadingScreen 
-        message="Loading Features" 
-        subMessage="Fetching ML model parameters..."
-        type="prediction"
-      />
-    )
+  const handleRetry = () => {
+    setRetryCount(0)
+    loadFeatures()
+    loadModels()
   }
+
+  // Use loaded features or fallback to defaults for immediate UI
+  const displayFeatures = features?.features || DEFAULT_FEATURES
+  const displayCategories = Object.keys(displayFeatures)
 
   return (
     <div className="space-y-6">
@@ -157,13 +158,42 @@ export default function PredictPage() {
           </p>
         </div>
         <div className="flex gap-3">
-          <button onClick={handleReset} className="btn-secondary">
+          <button onClick={handleReset} className="btn-secondary" disabled={featuresLoading}>
             Reset
           </button>
         </div>
       </div>
 
-      {/* 1. Model Selection */}
+      {/* Connection Status Banner */}
+      {(featuresLoading || featuresError) && (
+        <div className={`card ${featuresError && retryCount >= 2 ? 'bg-red-900/20 border-red-700' : 'bg-blue-900/20 border-blue-700'}`}>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              {featuresLoading ? (
+                <>
+                  <LoadingSpinner size="sm" />
+                  <span className="text-blue-400">
+                    {retryCount > 0 ? `Connecting to server (attempt ${retryCount + 1}/3)...` : 'Connecting to server...'}
+                  </span>
+                </>
+              ) : featuresError ? (
+                <>
+                  <AlertCircle className="w-5 h-5 text-red-400" />
+                  <span className="text-red-400">{featuresError}</span>
+                </>
+              ) : null}
+            </div>
+            {featuresError && retryCount >= 2 && (
+              <button onClick={handleRetry} className="btn-secondary flex items-center gap-2">
+                <RefreshCw className="w-4 h-4" />
+                Retry
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Model Selection - only show when loaded */}
       {models.length > 0 && (
         <div className="card">
           <h3 className="text-lg font-semibold mb-3">Select Model</h3>
@@ -190,21 +220,17 @@ export default function PredictPage() {
               </button>
             )}
           </div>
-          <p className="text-xs text-slate-500 mt-2">
-            {selectedModelId 
-              ? `Using model: ${models.find(m => m.id === selectedModelId)?.name || 'Unknown'}`
-              : 'Using the default model for predictions'}
-          </p>
         </div>
       )}
 
-      {/* 2. Random Example Buttons */}
+      {/* Random Example Buttons */}
       <div className="card">
         <h3 className="text-lg font-semibold mb-4">Load Random Examples</h3>
         <div className="grid md:grid-cols-3 gap-3">
           <button
             onClick={() => handleLoadRandomExample('CONFIRMED')}
             className="btn-secondary flex items-center justify-center gap-2"
+            disabled={!features}
           >
             <Dice1 className="w-4 h-4" />
             Random Confirmed Planet
@@ -212,6 +238,7 @@ export default function PredictPage() {
           <button
             onClick={() => handleLoadRandomExample('CANDIDATE')}
             className="btn-secondary flex items-center justify-center gap-2"
+            disabled={!features}
           >
             <Dice2 className="w-4 h-4" />
             Random Candidate
@@ -219,17 +246,18 @@ export default function PredictPage() {
           <button
             onClick={() => handleLoadRandomExample('FALSE POSITIVE')}
             className="btn-secondary flex items-center justify-center gap-2"
+            disabled={!features}
           >
             <Dice3 className="w-4 h-4" />
             Random False Positive
           </button>
         </div>
         <p className="text-sm text-slate-500 mt-3">
-          These buttons sample random examples from the KOI dataset.
+          {features ? 'These buttons sample random examples from the KOI dataset.' : 'Waiting for server connection...'}
         </p>
       </div>
 
-      {/* 3. Random Example Information */}
+      {/* Random Example Information */}
       {randomExampleData && (
         <div className="card bg-slate-800/50 border-slate-600">
           <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
@@ -254,11 +282,11 @@ export default function PredictPage() {
         </div>
       )}
 
-      {/* 4. Feature Input Form */}
+      {/* Feature Input Form */}
       <div className="card">
         <h3 className="text-lg font-semibold mb-4">Feature Parameters</h3>
         <div className="flex gap-2 mb-6 border-b border-slate-700 overflow-x-auto">
-          {Object.keys(features.features).map((category) => (
+          {displayCategories.map((category) => (
             <button
               key={category}
               onClick={() => setActiveCategory(category)}
@@ -274,26 +302,25 @@ export default function PredictPage() {
         </div>
 
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-96 overflow-y-auto pr-2">
-          {features.features[activeCategory].map((feature) => (
+          {(displayFeatures[activeCategory] || []).map((feature) => (
             <div key={feature} className="flex flex-col">
-              <label 
-                className="block text-sm font-medium text-slate-300 mb-1 cursor-help" 
-                title={features.descriptions?.[feature] || ''}
+              <label
+                className="block text-sm font-medium text-slate-300 mb-1 cursor-help"
+                title={features?.descriptions?.[feature] || ''}
               >
-                {features.labels?.[feature] || feature}
+                {features?.labels?.[feature] || feature}
               </label>
-              <div className="flex-grow">
-                <input
-                  type="number"
-                  step="any"
-                  value={formData[feature] || 0}
-                  onChange={(e) => handleInputChange(feature, e.target.value)}
-                  className="input-field w-full"
-                  placeholder="0.0"
-                />
-              </div>
-              {features.descriptions?.[feature] && (
-                <p className="text-xs text-slate-500 mt-1 min-h-[2.5rem]">
+              <input
+                type="number"
+                step="any"
+                value={formData[feature] || 0}
+                onChange={(e) => handleInputChange(feature, e.target.value)}
+                className="input-field w-full"
+                placeholder="0.0"
+                disabled={!features}
+              />
+              {features?.descriptions?.[feature] && (
+                <p className="text-xs text-slate-500 mt-1">
                   {features.descriptions[feature]}
                 </p>
               )}
@@ -304,7 +331,7 @@ export default function PredictPage() {
         <div className="mt-6 pt-6 border-t border-slate-700">
           <button
             onClick={handlePredict}
-            disabled={loading}
+            disabled={loading || !features}
             className="btn-primary w-full flex items-center justify-center gap-2"
           >
             {loading ? (
@@ -312,7 +339,7 @@ export default function PredictPage() {
             ) : (
               <>
                 <Target className="w-5 h-5" />
-                Predict
+                {features ? 'Predict' : 'Waiting for connection...'}
               </>
             )}
           </button>
@@ -328,7 +355,7 @@ export default function PredictPage() {
         </div>
       )}
 
-      {/* 5. Prediction Result */}
+      {/* Prediction Result */}
       {prediction && (
         <div className="card bg-gradient-to-br from-primary-900/30 to-slate-800 border-primary-700">
           <h3 className="text-xl font-semibold mb-4">Prediction Result</h3>
@@ -346,7 +373,7 @@ export default function PredictPage() {
               </p>
             </div>
           </div>
-          
+
           <div className="mt-6">
             <p className="text-sm text-slate-400 mb-3">Class Probabilities</p>
             <div className="space-y-2">
@@ -367,10 +394,9 @@ export default function PredictPage() {
             </div>
           </div>
 
-          {/* Prediction vs Expected Comparison */}
           {randomExampleData && (
             <div className="mt-6 pt-6 border-t border-slate-600">
-              <h4 className="text-lg font-semibold mb-4">📊 Prediction vs Expected</h4>
+              <h4 className="text-lg font-semibold mb-4">Prediction vs Expected</h4>
               <div className="grid md:grid-cols-2 gap-4">
                 <div>
                   <p className="text-sm text-slate-400 mb-2">Expected (NASA):</p>
@@ -385,19 +411,18 @@ export default function PredictPage() {
                   </div>
                 </div>
               </div>
-              
-              {/* Match/Mismatch Result */}
+
               <div className="mt-4">
                 {prediction.prediction === randomExampleData.metadata.expected_disposition ? (
                   <div className="flex items-center gap-2 text-green-400">
                     <CheckCircle className="w-5 h-5" />
-                    <span className="font-semibold">🎉 CORRECT! Model prediction matches NASA's classification!</span>
+                    <span className="font-semibold">CORRECT! Model prediction matches NASA's classification!</span>
                   </div>
                 ) : (
                   <div className="flex items-center gap-2 text-red-400">
                     <XCircle className="w-5 h-5" />
                     <span className="font-semibold">
-                      ❌ MISMATCH! Expected {randomExampleData.metadata.expected_disposition}, but model predicted {prediction.prediction}
+                      MISMATCH: Expected {randomExampleData.metadata.expected_disposition}, got {prediction.prediction}
                     </span>
                   </div>
                 )}

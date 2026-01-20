@@ -237,18 +237,8 @@ class DatasetResponse(BaseModel):
 model = None
 models_metadata_cache = None
 
-@app.on_event("startup")
-def load_model_on_startup():
-    """Load the trained model at application startup"""
-    global model
-    print(f"[DEBUG] Model path: {MODEL_PATH}")
-    print(f"[DEBUG] Model exists: {os.path.exists(MODEL_PATH)}")
-    print(f"[DEBUG] Current working directory: {os.getcwd()}")
-    print(f"[DEBUG] Files in current dir: {os.listdir('.')}")
-    print(f"[DEBUG] BASE_DIR: {BASE_DIR}")
-    print(f"[DEBUG] Files in BASE_DIR: {os.listdir(BASE_DIR) if os.path.exists(BASE_DIR) else 'BASE_DIR not found'}")
-    
-    # Try multiple possible model locations
+def _find_model_path():
+    """Find the model file from possible locations"""
     possible_paths = [
         MODEL_PATH,
         os.path.join(BASE_DIR, "balanced_model_20251005_115605.joblib"),
@@ -257,40 +247,39 @@ def load_model_on_startup():
         "/app/properly_trained_model.joblib",
         "/app/balanced_model_20251005_115605.joblib"
     ]
-    
-    model_path_to_use = None
+
     for path in possible_paths:
         if os.path.exists(path):
-            print(f"[INFO] Found model at: {path}")
-            model_path_to_use = path
-            break
-    
-    if not model_path_to_use:
-        print(f"[ERROR] Model file not found in any of these locations:")
-        for path in possible_paths:
-            print(f"  - {path}")
-        print(f"[ERROR] Model will not be available for predictions")
-        model = None
-        return
-    
-    try:
-        print(f"[INFO] Loading model from {model_path_to_use}")
-        model = joblib.load(model_path_to_use)
-        print(f"[INFO] Model loaded successfully: {type(model).__name__}")
-        print("[INFO] Model loaded successfully at startup")
-    except Exception as e:
-        print(f"[ERROR] Failed to load model: {str(e)}")
-        print(f"[ERROR] Model will not be available for predictions")
-        model = None
+            return path
+    return None
 
 def get_model():
-    """Get the loaded model, raising an error if it's not available"""
-    if model is None:
+    """Get the loaded model, loading lazily on first call"""
+    global model
+
+    if model is not None:
+        return model
+
+    # Lazy load on first request
+    model_path = _find_model_path()
+
+    if not model_path:
         raise HTTPException(
             status_code=503,
-            detail="Model is not loaded. Check server logs for errors."
+            detail="Model file not found. Check server configuration."
         )
-    return model
+
+    try:
+        print(f"[INFO] Lazy loading model from {model_path}")
+        model = joblib.load(model_path)
+        print(f"[INFO] Model loaded successfully: {type(model).__name__}")
+        return model
+    except Exception as e:
+        print(f"[ERROR] Failed to load model: {str(e)}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Failed to load model: {str(e)}"
+        )
 
 
 def get_feature_names(model):
