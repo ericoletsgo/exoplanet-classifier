@@ -166,6 +166,15 @@ class APIClient {
     return this.request<{ status: string; service: string; version: string }>('/')
   }
 
+  /**
+   * Lightweight warm-up call — triggers serverless cold start + model pre-load
+   * without waiting for a full health check. Fire-and-forget on app mount.
+   */
+  warmUp() {
+    // Use fetch directly to avoid any error handling / retry overhead
+    fetch(`${API_BASE_URL}/warm`, { method: 'GET' }).catch(() => {})
+  }
+
   async getFeatures() {
     return this.request<FeaturesResponse>('/features', { useCache: true, timeout: 30000 })
   }

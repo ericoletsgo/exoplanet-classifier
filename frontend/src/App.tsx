@@ -1,8 +1,9 @@
 import { Home, Target, Database, Upload, Brain } from 'lucide-react'
-import { Suspense, lazy } from 'react'
+import { Suspense, lazy, useEffect } from 'react'
 import { Routes, Route, NavLink } from 'react-router-dom'
 import HomePage from './pages/HomePage'
 import LoadingScreen from './components/LoadingScreen'
+import { api } from './lib/api'
 
 // Lazy load heavy components to improve initial load time
 const PredictPage = lazy(() => import('./pages/PredictPage'))
@@ -60,6 +61,13 @@ function Navigation() {
 }
 
 function App() {
+  // Fire a lightweight warm-up call immediately on mount to trigger the
+  // serverless cold-start and model pre-load while the user is still
+  // reading the page. This is fire-and-forget; errors are silently ignored.
+  useEffect(() => {
+    api.warmUp()
+  }, [])
+
   return (
     <div className="min-h-screen bg-slate-900 text-white">
       <Navigation />

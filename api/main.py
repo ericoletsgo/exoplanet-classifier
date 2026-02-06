@@ -235,6 +235,7 @@ class DatasetResponse(BaseModel):
 
 # Global variables
 model = None
+model_loading = False
 models_metadata_cache = None
 
 def _find_model_path():
@@ -253,33 +254,68 @@ def _find_model_path():
             return path
     return None
 
+def _load_model():
+    """Internal: load the model from disk into the global variable"""
+    global model, model_loading
+    
+    if model is not None:
+        return model
+    
+    if model_loading:
+        # Another request is already loading, wait briefly
+        import time
+        for _ in range(50):  # Wait up to 5 seconds
+            time.sleep(0.1)
+            if model is not None:
+                return model
+        
+    model_loading = True
+    model_path = _find_model_path()
+
+    if not model_path:
+        model_loading = False
+        return None
+
+    try:
+        import time
+        start = time.time()
+        print(f"[INFO] Loading model from {model_path}")
+        loaded = joblib.load(model_path)
+        elapsed = time.time() - start
+        print(f"[INFO] Model loaded successfully in {elapsed:.2f}s: {type(loaded).__name__}")
+        model = loaded
+        return model
+    except Exception as e:
+        print(f"[ERROR] Failed to load model: {str(e)}")
+        return None
+    finally:
+        model_loading = False
+
 def get_model():
-    """Get the loaded model, loading lazily on first call"""
+    """Get the loaded model, loading on first call if not pre-loaded at startup"""
     global model
 
     if model is not None:
         return model
 
-    # Lazy load on first request
-    model_path = _find_model_path()
-
-    if not model_path:
+    loaded = _load_model()
+    if loaded is None:
         raise HTTPException(
             status_code=503,
-            detail="Model file not found. Check server configuration."
+            detail="Model file not found or failed to load. Check server configuration."
         )
+    return loaded
 
-    try:
-        print(f"[INFO] Lazy loading model from {model_path}")
-        model = joblib.load(model_path)
-        print(f"[INFO] Model loaded successfully: {type(model).__name__}")
-        return model
-    except Exception as e:
-        print(f"[ERROR] Failed to load model: {str(e)}")
-        raise HTTPException(
-            status_code=503,
-            detail=f"Failed to load model: {str(e)}"
-        )
+# Pre-load model at startup so the first request doesn't pay the loading cost
+@app.on_event("startup")
+async def startup_preload_model():
+    """Pre-load the ML model at startup instead of on first request"""
+    print("[INFO] Startup: pre-loading ML model...")
+    loaded = _load_model()
+    if loaded is not None:
+        print(f"[INFO] Startup: model pre-loaded successfully ({type(loaded).__name__})")
+    else:
+        print("[WARNING] Startup: model not found, will retry on first request")
 
 
 def get_feature_names(model):
@@ -1056,11 +1092,11 @@ async def get_random_example_from_all_datasets(disposition: Optional[str] = None
 async def health_check():
     """Dedicated health check endpoint for monitoring"""
     try:
-        model = get_model()
+        m = get_model()
         return {
             "status": "healthy",
             "model_loaded": True,
-            "model_type": type(model).__name__,
+            "model_type": type(m).__name__,
             "timestamp": datetime.now().isoformat()
         }
     except Exception as e:
@@ -1070,6 +1106,15 @@ async def health_check():
             "error": str(e),
             "timestamp": datetime.now().isoformat()
         }
+
+@app.get("/warm")
+async def warm():
+    """Lightweight warm-up endpoint - frontend calls this early to trigger cold start"""
+    return {
+        "status": "warm",
+        "model_ready": model is not None,
+        "timestamp": datetime.now().isoformat()
+    }
 
 @app.options("/models")
 @app.get("/models")
