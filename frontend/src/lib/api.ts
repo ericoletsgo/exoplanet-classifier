@@ -1,4 +1,4 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:8000' : '')
+const API_BASE_URL = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:8000' : '/api')
 
 // Debug logging
 if (typeof window !== 'undefined') {
@@ -24,17 +24,6 @@ export interface BatchPredictionRequest {
 
 export interface BatchPredictionResponse {
   predictions: PredictionResponse[]
-}
-
-export interface MetricsResponse {
-  accuracy: number
-  precision: number
-  recall: number
-  f1_score: number
-  confusion_matrix: number[][]
-  roc_data?: Record<string, { fpr: number[]; tpr: number[]; auc: number }>
-  feature_importances?: Array<{ feature: string; importance: number }>
-  model_info: Record<string, any>
 }
 
 export interface DatasetResponse {
@@ -164,9 +153,6 @@ class APIClient {
     })
   }
 
-  async getMetrics() {
-    return this.request<MetricsResponse>('/metrics', { timeout: 30000 }) // 30 second timeout for heavy operation
-  }
 
   async getDataset(
     datasetName: string,
@@ -185,7 +171,7 @@ class APIClient {
   }
 
   async getDatasetColumns(datasetName: string) {
-    return this.request<DatasetColumnsResponse>(`/datasets/${datasetName}/columns`)
+    return this.request<DatasetColumnsResponse>(`/datasets/${datasetName}/columns`, { timeout: 20000 }) // 20 second timeout for columns
   }
 
   async evaluateModel(modelId: string) {
@@ -193,7 +179,7 @@ class APIClient {
   }
 
   async listModels() {
-    return this.request<{ models: any[] }>('/models')
+    return this.request<{ models: any[] }>('/models', { timeout: 30000 }) // 30 second timeout for models
   }
 
   async getRandomExample(datasetName: string, disposition?: string) {
@@ -216,14 +202,6 @@ class APIClient {
   }
 
 
-  async getFeatureCorrelations() {
-    return this.request<{
-      features: string[]
-      matrix: number[][]
-      sample_size: number
-      total_features: number
-    }>('/feature-correlations')
-  }
 
   async trainModel(data: { 
     dataset: string
@@ -280,7 +258,7 @@ class APIClient {
       algorithms: Record<string, boolean>
       available_count: number
       total_count: number
-    }>('/algorithms')
+    }>('/algorithms', { timeout: 20000 }) // 20 second timeout for algorithms
   }
 }
 

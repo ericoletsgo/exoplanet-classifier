@@ -12,13 +12,11 @@ import numpy as np
 import json
 import os
 from datetime import datetime
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix, roc_curve, auc
-from sklearn.preprocessing import label_binarize
 
 app = FastAPI(
     title="Exoplanet Classifier API",
     description="REST API for exoplanet classification using machine learning",
-    version="1.0.9"  # Bumped to force deployment with metrics and predict-raw fixes
+    version="1.1.2"  # Bumped to force deployment with timeout and error handling improvements
 )
 
 # CORS middleware to allow frontend requests
@@ -30,12 +28,24 @@ app.add_middleware(
     allow_headers=["*"],  # Allow all headers
 )
 
+# Add timeout middleware for better error handling (increased timeout for heavy operations)
+@app.middleware("http")
+async def timeout_middleware(request, call_next):
+    import asyncio
+    # Longer timeout for heavy operations like metrics and correlations
+    timeout = 60.0 if request.url.path in ['/metrics', '/feature-correlations', '/train'] else 30.0
+    try:
+        response = await asyncio.wait_for(call_next(request), timeout=timeout)
+        return response
+    except asyncio.TimeoutError:
+        return {"error": "Request timeout", "detail": f"The request took too long to process (>{timeout}s)"}
+
 # CORS middleware handles OPTIONS requests automatically
 
 # Constants
 # Get the parent directory (project root) to find model files
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODEL_PATH = os.path.join(BASE_DIR, "properly_trained_model.joblib")
+MODEL_PATH = os.path.join(BASE_DIR, "balanced_model_20251005_115605.joblib")
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 MODELS_METADATA_FILE = os.path.join(BASE_DIR, "models", "models_metadata.json")
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -167,15 +177,6 @@ class BatchPredictionRequest(BaseModel):
 class BatchPredictionResponse(BaseModel):
     predictions: List[PredictionResponse]
 
-class MetricsResponse(BaseModel):
-    accuracy: float
-    precision: float
-    recall: float
-    f1_score: float
-    confusion_matrix: List[List[int]]
-    roc_data: Optional[Dict[str, Any]] = None
-    feature_importances: Optional[List[Dict[str, Any]]] = None
-    model_info: Dict[str, Any]
 
 class Hyperparameters(BaseModel):
     # Gradient Boosting parameters
@@ -232,65 +233,64 @@ class DatasetResponse(BaseModel):
     page_size: int
     total_pages: int
 
-# Global model cache
-_model_cache = None
-
-def load_model():
-    """Load the trained model"""
-    global _model_cache
-    if _model_cache is None:
-        print(f"[DEBUG] Model path: {MODEL_PATH}")
-        print(f"[DEBUG] Model exists: {os.path.exists(MODEL_PATH)}")
-        print(f"[DEBUG] Current working directory: {os.getcwd()}")
-        print(f"[DEBUG] Files in current dir: {os.listdir('.')}")
-        print(f"[DEBUG] BASE_DIR: {BASE_DIR}")
-        print(f"[DEBUG] Files in BASE_DIR: {os.listdir(BASE_DIR) if os.path.exists(BASE_DIR) else 'BASE_DIR not found'}")
-        
-        # Try multiple possible model locations
-        possible_paths = [
-            MODEL_PATH,
-            os.path.join(BASE_DIR, "balanced_model_20251005_115605.joblib"),
-            os.path.join(os.getcwd(), "properly_trained_model.joblib"),
-            os.path.join(os.getcwd(), "balanced_model_20251005_115605.joblib"),
-            "/app/properly_trained_model.joblib",
-            "/app/balanced_model_20251005_115605.joblib"
-        ]
-        
-        model_path_to_use = None
-        for path in possible_paths:
-            if os.path.exists(path):
-                print(f"[INFO] Found model at: {path}")
-                model_path_to_use = path
-                break
-        
-        if not model_path_to_use:
-            print(f"[ERROR] Model not found in any of these locations:")
-            for path in possible_paths:
-                print(f"  - {path}")
-            raise HTTPException(status_code=404, detail=f"Model file not found. Checked: {possible_paths}")
-        
-        try:
-            print(f"[INFO] Loading model from {model_path_to_use}")
-            _model_cache = joblib.load(model_path_to_use)
-            print(f"[INFO] Model loaded successfully: {type(_model_cache).__name__}")
-        except Exception as e:
-            print(f"[ERROR] Failed to load model: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Model loading failed: {str(e)}")
-    
-    return _model_cache
-
-def get_model():
-    """Get the loaded model, loading it if necessary"""
-    return load_model()
+# Global variables
+model = None
 
 @app.on_event("startup")
 def load_model_on_startup():
     """Load the trained model at application startup"""
+    global model
+    print(f"[DEBUG] Model path: {MODEL_PATH}")
+    print(f"[DEBUG] Model exists: {os.path.exists(MODEL_PATH)}")
+    print(f"[DEBUG] Current working directory: {os.getcwd()}")
+    print(f"[DEBUG] Files in current dir: {os.listdir('.')}")
+    print(f"[DEBUG] BASE_DIR: {BASE_DIR}")
+    print(f"[DEBUG] Files in BASE_DIR: {os.listdir(BASE_DIR) if os.path.exists(BASE_DIR) else 'BASE_DIR not found'}")
+    
+    # Try multiple possible model locations
+    possible_paths = [
+        MODEL_PATH,
+        os.path.join(BASE_DIR, "balanced_model_20251005_115605.joblib"),
+        os.path.join(os.getcwd(), "properly_trained_model.joblib"),
+        os.path.join(os.getcwd(), "balanced_model_20251005_115605.joblib"),
+        "/app/properly_trained_model.joblib",
+        "/app/balanced_model_20251005_115605.joblib"
+    ]
+    
+    model_path_to_use = None
+    for path in possible_paths:
+        if os.path.exists(path):
+            print(f"[INFO] Found model at: {path}")
+            model_path_to_use = path
+            break
+    
+    if not model_path_to_use:
+        print(f"[ERROR] Model file not found in any of these locations:")
+        for path in possible_paths:
+            print(f"  - {path}")
+        print(f"[ERROR] Model will not be available for predictions")
+        model = None
+        return
+    
     try:
-        load_model()
+        print(f"[INFO] Loading model from {model_path_to_use}")
+        model = joblib.load(model_path_to_use)
+        print(f"[INFO] Model loaded successfully: {type(model).__name__}")
         print("[INFO] Model loaded successfully at startup")
     except Exception as e:
-        print(f"[ERROR] Failed to load model at startup: {str(e)}")
+        print(f"[ERROR] Failed to load model: {str(e)}")
+        print(f"[ERROR] Model will not be available for predictions")
+        model = None
+
+def get_model():
+    """Get the loaded model, raising an error if it's not available"""
+    if model is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Model is not loaded. Check server logs for errors."
+        )
+    return model
+
 
 def get_feature_names(model):
     """Extract feature names from model"""
@@ -321,7 +321,7 @@ async def root():
     """Health check endpoint"""
     model_status = "unknown"
     try:
-        load_model()
+        get_model()
         model_status = "loaded"
     except Exception as e:
         model_status = f"error: {str(e)}"
@@ -329,9 +329,10 @@ async def root():
     return {
         "status": "online",
         "service": "Exoplanet Classifier API",
-        "version": "1.0.0",
+        "version": "1.1.2",
         "model_status": model_status,
-        "endpoints": ["/predict", "/metrics", "/train", "/datasets", "/features"]
+        "endpoints": ["/predict", "/metrics", "/train", "/datasets", "/features", "/models", "/batch-predict"],
+        "timestamp": datetime.now().isoformat()
     }
 
 @app.options("/features")
@@ -491,139 +492,6 @@ async def predict_raw(request: dict):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Raw prediction failed: {str(e)}")
 
-@app.options("/metrics")
-@app.get("/metrics", response_model=MetricsResponse)
-async def get_metrics():
-    """Get model performance metrics on held-out test set"""
-    try:
-        model = get_model()
-        
-        # Get feature names from model
-        feature_names = get_feature_names(model)
-        
-        # Try to load the held-out test set first
-        test_set_path = os.path.join(DATA_DIR, "test_set.joblib")
-        if os.path.exists(test_set_path):
-            # Use the proper held-out test set
-            print(f"[INFO] Loading held-out test set from {test_set_path}")
-            test_data = joblib.load(test_set_path)
-            X = test_data['X_test']
-            y = test_data['y_test']
-            print(f"[INFO] Test set loaded: {len(X)} samples")
-            
-            # Check if test set features match model features
-            model_features = set(feature_names)
-            test_features = set(X.columns)
-            
-            if model_features != test_features:
-                print(f"[WARNING] Test set features don't match model features!")
-                print(f"[WARNING] Model expects {len(model_features)} features, test set has {len(test_features)}")
-                print(f"[WARNING] Missing features: {model_features - test_features}")
-                print(f"[WARNING] Using full dataset instead of test set for metrics")
-                
-                # Fallback to full dataset
-                koi_path = os.path.join(DATA_DIR, "koi.csv")
-                if not os.path.exists(koi_path):
-                    raise HTTPException(status_code=404, detail="Dataset not found")
-                
-                df = pd.read_csv(koi_path, comment='#')
-                df['target'] = df['koi_disposition'].map({'CONFIRMED': 2, 'CANDIDATE': 1, 'FALSE POSITIVE': 0})
-                df = df[df['target'].notna()]
-                
-                # Get features
-                available_features = [f for f in feature_names if f in df.columns]
-                
-                X = df[available_features].fillna(0)
-                y = df['target'].astype(int)
-        else:
-            # Fallback: Load full dataset (will show warning)
-            # This is NOT ideal - metrics will be inflated
-            print("[WARNING] Test set not found, using full dataset (metrics will be inflated!)")
-            koi_path = os.path.join(DATA_DIR, "koi.csv")
-            if not os.path.exists(koi_path):
-                raise HTTPException(status_code=404, detail="Dataset not found")
-            
-            df = pd.read_csv(koi_path, comment='#')
-            df['target'] = df['koi_disposition'].map({'CONFIRMED': 2, 'CANDIDATE': 1, 'FALSE POSITIVE': 0})
-            df = df[df['target'].notna()]
-            
-            # Get features
-            available_features = [f for f in feature_names if f in df.columns]
-            
-            X = df[available_features].fillna(0)
-            y = df['target'].astype(int)
-        
-        # Make predictions
-        y_pred = model.predict(X)
-        y_proba = model.predict_proba(X)
-        
-        # Calculate metrics
-        accuracy = accuracy_score(y, y_pred)
-        precision = precision_score(y, y_pred, average='weighted', zero_division=0)
-        recall = recall_score(y, y_pred, average='weighted', zero_division=0)
-        f1 = f1_score(y, y_pred, average='weighted', zero_division=0)
-        cm = confusion_matrix(y, y_pred)
-        
-        # ROC curve data (for multi-class)
-        y_bin = label_binarize(y, classes=[0, 1, 2])
-        roc_data = {}
-        
-        for i, label in enumerate(["FALSE POSITIVE", "CANDIDATE", "CONFIRMED"]):
-            fpr, tpr, _ = roc_curve(y_bin[:, i], y_proba[:, i])
-            roc_auc = auc(fpr, tpr)
-            roc_data[label] = {
-                "fpr": fpr.tolist(),
-                "tpr": tpr.tolist(),
-                "auc": float(roc_auc)
-            }
-        
-        # Feature importances
-        feature_importances = None
-        if hasattr(model, 'feature_importances_'):
-            importances = model.feature_importances_
-            feature_importances = [
-                {"feature": name, "importance": float(imp)}
-                for name, imp in zip(feature_names, importances)
-            ]
-            feature_importances.sort(key=lambda x: x['importance'], reverse=True)
-        elif hasattr(model, 'estimators_'):
-            # For ensemble models, try to get from first estimator
-            try:
-                first_estimator = model.estimators_[0][1] if hasattr(model.estimators_[0], '__getitem__') else model.estimators_[0]
-                if hasattr(first_estimator, 'feature_importances_'):
-                    importances = first_estimator.feature_importances_
-                    feature_importances = [
-                        {"feature": name, "importance": float(imp)}
-                        for name, imp in zip(feature_names, importances)
-                    ]
-                    feature_importances.sort(key=lambda x: x['importance'], reverse=True)
-            except:
-                pass
-        
-        # Model info
-        model_info = {
-            "model_type": type(model).__name__,
-            "n_features": len(feature_names),
-            "n_samples": len(X),
-            "classes": ["FALSE POSITIVE", "CANDIDATE", "CONFIRMED"]
-        }
-        
-        if hasattr(model, 'metadata'):
-            model_info.update(model.metadata)
-        
-        return MetricsResponse(
-            accuracy=float(accuracy),
-            precision=float(precision),
-            recall=float(recall),
-            f1_score=float(f1),
-            confusion_matrix=cm.tolist(),
-            roc_data=roc_data,
-            feature_importances=feature_importances,
-            model_info=model_info
-        )
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get metrics: {str(e)}")
 
 @app.options("/train")
 @app.post("/train", response_model=TrainingResponse)
@@ -1194,16 +1062,50 @@ async def get_random_example_from_all_datasets(disposition: Optional[str] = None
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get random example: {str(e)}")
 
+@app.get("/health")
+async def health_check():
+    """Dedicated health check endpoint for monitoring"""
+    try:
+        model = get_model()
+        return {
+            "status": "healthy",
+            "model_loaded": True,
+            "model_type": type(model).__name__,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "model_loaded": False,
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
+
 @app.options("/models")
 @app.get("/models")
 async def list_models():
-    """List all available trained models"""
+    """List all available trained models - OPTIMIZED with caching"""
+    global models_metadata_cache
+    
+    # Return cached models if available (valid for 30 minutes)
+    if models_metadata_cache and models_metadata_cache.get('timestamp'):
+        cache_time = datetime.fromisoformat(models_metadata_cache['timestamp'])
+        if datetime.now() - cache_time < timedelta(minutes=30):
+            print("[INFO] Returning cached models metadata")
+            return {"models": models_metadata_cache['data']}
+    
     try:
         if not os.path.exists(MODELS_METADATA_FILE):
             return {"models": []}
         
         with open(MODELS_METADATA_FILE, 'r') as f:
             metadata = json.load(f)
+        
+        # Cache the result
+        models_metadata_cache = {
+            'data': metadata,
+            'timestamp': datetime.now().isoformat()
+        }
         
         return {"models": metadata}
         
@@ -1317,54 +1219,6 @@ async def get_dataset_columns(dataset_name: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get dataset columns: {str(e)}")
 
-@app.options("/feature-correlations")
-@app.get("/feature-correlations")
-async def get_feature_correlations():
-    """Get feature correlation matrix for visualization"""
-    try:
-        # Load a sample of the dataset for correlation analysis
-        koi_path = os.path.join(DATA_DIR, "koi.csv")
-        if not os.path.exists(koi_path):
-            raise HTTPException(status_code=404, detail="Dataset not found")
-        
-        # Load a sample of the data
-        df = pd.read_csv(koi_path, comment='#')
-        
-        # Get the relevant features used by the model
-        model = load_model()
-        feature_names = get_feature_names(model)
-        
-        # Filter to only features that exist in the dataset
-        available_features = [f for f in feature_names if f in df.columns]
-        
-        # Take a sample for performance (correlation computation can be expensive)
-        sample_size = min(5000, len(df))
-        df_sample = df[available_features].sample(n=sample_size, random_state=42)
-        
-        # Fill NaN values with 0 to prevent correlation calculation errors
-        df_sample = df_sample.fillna(0)
-        
-        # Calculate correlation matrix
-        correlation_matrix = df_sample.corr()
-        
-        # Replace NaN values with 0 for JSON serialization
-        correlation_matrix = correlation_matrix.fillna(0)
-        
-        # Convert to format suitable for frontend
-        correlations = {
-            "features": list(correlation_matrix.columns),
-            "matrix": correlation_matrix.values.tolist(),
-            "sample_size": sample_size,
-            "total_features": len(available_features)
-        }
-        
-        return correlations
-        
-    except Exception as e:
-        print(f"[ERROR] Correlation calculation failed: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Failed to calculate correlations: {str(e)}")
 
 @app.options("/algorithms")
 @app.get("/algorithms")
@@ -1397,51 +1251,11 @@ async def get_available_algorithms():
         "total_count": len(algorithms)
     }
 
-# Add static file serving for production
-from fastapi.staticfiles import StaticFiles
-import os
+# Vercel handles all frontend routing automatically
+# FastAPI only needs to handle API endpoints
 
-# Serve React build files in production
-if os.path.exists("static"):
-    app.mount("/static", StaticFiles(directory="static"), name="static")
-    
-    # Serve React app for frontend routes only
-    from fastapi.responses import FileResponse
-    
-    # Serve React app for non-conflicting frontend routes
-    @app.get("/batch")
-    async def serve_batch_page():
-        if os.path.exists("static/index.html"):
-            return FileResponse("static/index.html")
-        else:
-            raise HTTPException(status_code=404, detail="Frontend not built")
-    
-    @app.get("/retrain")
-    async def serve_retrain_page():
-        if os.path.exists("static/index.html"):
-            return FileResponse("static/index.html")
-        else:
-            raise HTTPException(status_code=404, detail="Frontend not built")
-    
-    # Catch-all for other frontend routes (React Router will handle routing)
-    @app.get("/{full_path:path}")
-    async def serve_react_app(full_path: str):
-        # Don't serve React for API routes or system routes
-        if (full_path.startswith("api/") or 
-            full_path.startswith("docs") or 
-            full_path.startswith("redoc") or
-            full_path.startswith("static/") or
-            full_path == "openapi.json" or
-            full_path in ["features", "metrics", "predict", "train", "datasets", "models", "random-example"] or
-            full_path.startswith("datasets/") or
-            full_path.startswith("random-example/")):
-            raise HTTPException(status_code=404, detail="Not found")
-        
-        # Serve React app for all other routes
-        if os.path.exists("static/index.html"):
-            return FileResponse("static/index.html")
-        else:
-            raise HTTPException(status_code=404, detail="Frontend not built")
+# Vercel compatibility
+handler = app
 
 if __name__ == "__main__":
     import uvicorn

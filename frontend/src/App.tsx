@@ -1,8 +1,8 @@
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom'
-import { Home, Target, BarChart3, Database, Upload, Brain } from 'lucide-react'
+import { Home, Target, Database, Upload, Brain } from 'lucide-react'
+import { useEffect } from 'react'
 import HomePage from './pages/HomePage'
 import PredictPage from './pages/PredictPage'
-import MetricsPage from './pages/MetricsPage'
 import DatasetsPage from './pages/DatasetsPage'
 import BatchPredictPage from './pages/BatchPredictPage'
 import ModelRetrainingPage from './pages/ModelRetrainingPage'
@@ -10,12 +10,18 @@ import ModelRetrainingPage from './pages/ModelRetrainingPage'
 function Navigation() {
   const location = useLocation()
   
+  // Debug logging for routing
+  useEffect(() => {
+    console.log('🔍 [ROUTING DEBUG] Current pathname:', location.pathname)
+    console.log('🔍 [ROUTING DEBUG] Full location:', location)
+    console.log('🔍 [ROUTING DEBUG] Timestamp:', new Date().toISOString())
+  }, [location])
+  
   const navItems = [
     { path: '/', icon: Home, label: 'Home' },
     { path: '/predict', icon: Target, label: 'Predict' },
     { path: '/batch', icon: Upload, label: 'Batch Upload' },
     { path: '/retrain', icon: Brain, label: 'Model Retraining' },
-    { path: '/metrics', icon: BarChart3, label: 'Metrics' },
     { path: '/datasets', icon: Database, label: 'Datasets' },
   ]
   
@@ -57,6 +63,19 @@ function Navigation() {
   )
 }
 
+// Debug component to show current route
+function RouteDebugger() {
+  const location = useLocation()
+  
+  return (
+    <div className="fixed bottom-4 right-4 bg-blue-900 text-white p-2 rounded text-xs z-50">
+      <div>Route: {location.pathname}</div>
+      <div>Search: {location.search}</div>
+      <div>Hash: {location.hash}</div>
+    </div>
+  )
+}
+
 function App() {
   return (
     <Router>
@@ -68,10 +87,10 @@ function App() {
             <Route path="/predict" element={<PredictPage />} />
             <Route path="/batch" element={<BatchPredictPage />} />
             <Route path="/retrain" element={<ModelRetrainingPage />} />
-            <Route path="/metrics" element={<MetricsPage />} />
             <Route path="/datasets" element={<DatasetsPage />} />
           </Routes>
         </main>
+        <RouteDebugger />
       </div>
     </Router>
   )
